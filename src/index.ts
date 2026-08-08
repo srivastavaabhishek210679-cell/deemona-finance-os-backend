@@ -1,0 +1,174 @@
+import dotenv from 'dotenv';
+dotenv.config();
+
+import express from 'express';
+import cors from 'cors';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
+import cron from 'node-cron';
+
+import { pool, testConnection } from './db/pool';
+import { createAuthRouter } from './routes/authRoutes';
+import { createMemoryRouter } from './routes/memoryRoutes';
+import { createAccountingRouter } from './routes/accountingRoutes';
+import { createTreasuryRouter } from './routes/treasuryRoutes';
+import { createProcurementRouter } from './routes/procurementRoutes';
+import { createPayrollRouter } from './routes/payrollRoutes';
+import { createTaxRouter } from './routes/taxRoutes';
+import { createBudgetingRouter } from './routes/budgetingRoutes';
+import { createExpensesRouter } from './routes/expensesRoutes';
+import { createAssetsRouter } from './routes/assetsRoutes';
+import { createInventoryRouter } from './routes/inventoryRoutes';
+import { createProjectsRouter } from './routes/projectsRoutes';
+import { createComplianceRouter } from './routes/complianceRoutes';
+import { createCRMRouter } from './routes/crmRoutes';
+import { createAgentRouter } from './routes/agentRoutes';
+import {
+  processEmbeddingQueue,
+  refreshEntityProfiles,
+  archiveOldMemories,
+} from './jobs/memoryCron';
+
+const app = express();
+const PORT = parseInt(process.env.PORT ?? '4000');
+
+// ── Security & parsing ────────────────────────────────────────
+app.use(helmet());
+app.use(cors({
+  origin: [process.env.FRONTEND_URL ?? 'http://localhost:5173', 'http://localhost:5174'],
+  credentials: true,
+}));
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true }));
+
+// ── Rate limiting ─────────────────────────────────────────────
+app.use('/api/', rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 500,
+  message: { error: 'Too many requests, please try again later.' },
+}));
+
+// ── Health check ──────────────────────────────────────────────
+app.get('/health', (_req, res) => {
+  res.json({ status: 'ok', app: 'Deemona AI Finance OS', timestamp: new Date().toISOString() });
+});
+
+// ── API Routes ────────────────────────────────────────────────
+// Auth
+app.use('/api/auth', createAuthRouter(pool));
+
+// Finance Memory (Phase 1 — active now)
+app.use('/api/memory', createMemoryRouter(pool));
+
+// Accounting module (Phase A)
+app.use('/api/accounting', createAccountingRouter(pool));
+app.use('/api/agents',     createAgentRouter(pool));
+app.use('/api/treasury',   createTreasuryRouter(pool));
+app.use('/api/procurement', createProcurementRouter(pool));
+app.use('/api/payroll',     createPayrollRouter(pool));
+app.use('/api/tax',        createTaxRouter(pool));
+app.use('/api/budgeting',  createBudgetingRouter(pool));
+app.use('/api/expenses',   createExpensesRouter(pool));
+app.use('/api/assets',     createAssetsRouter(pool));
+app.use('/api/inventory',  createInventoryRouter(pool));
+app.use('/api/projects',   createProjectsRouter(pool));
+app.use('/api/compliance', createComplianceRouter(pool));
+app.use('/api/crm',        createCRMRouter(pool));
+
+// Future routes — uncomment as each phase is built:
+// app.use('/api/auth',        authRouter(pool));
+// app.use('/api/accounting',  accountingRouter(pool));
+// app.use('/api/treasury',    treasuryRouter(pool));
+// app.use('/api/procurement', procurementRouter(pool));
+// app.use('/api/payroll',     payrollRouter(pool));
+// app.use('/api/tax',         taxRouter(pool));
+// app.use('/api/compliance',  complianceRouter(pool));
+// app.use('/api/crm',         crmRouter(pool));
+// app.use('/api/inventory',   inventoryRouter(pool));
+// app.use('/api/assets',      assetsRouter(pool));
+// app.use('/api/projects',    projectsRouter(pool));
+// app.use('/api/expenses',    expensesRouter(pool));
+// app.use('/api/budgeting',   budgetingRouter(pool));
+// app.use('/api/agents',      agentsRouter(pool));        // Phase 4
+// app.use('/api/twin',        digitalTwinRouter(pool));   // Phase 5
+// app.use('/api/automation',  automationRouter(pool));    // Phase 2
+
+// ── AI Brief endpoint (no auth — for Decision Center) ────────
+app.post('/api/brief', async (req: express.Request, res: express.Response) => {
+  try {
+    const { prompt } = req.body;
+    if (!prompt) {
+      res.status(400).json({ error: 'prompt is required' });
+      return;
+    }
+    if (!process.env.ANTHROPIC_API_KEY) {
+      res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+      return;
+    }
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': process.env.ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-5',
+        max_tokens: 600,
+        messages: [{ role: 'user', content: prompt }],
+      }),
+    });
+    const data = await response.json() as any;
+    console.log('[Brief] Response status:', response.status);
+    if (!response.ok) {
+      console.error('[Brief] API error:', data);
+      res.status(500).json({ error: data?.error?.message ?? 'API error' });
+      return;
+    }
+    const text = data?.content?.[0]?.text ?? '';
+    res.json({ text });
+  } catch (err) {
+    console.error('[Brief] Error:', err);
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+// ── 404 ───────────────────────────────────────────────────────
+app.use((_req, res) => {
+  res.status(404).json({ error: 'Route not found' });
+});
+
+// ── Global error handler ──────────────────────────────────────
+app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  console.error('[Error]', err.message);
+  res.status(500).json({ error: 'Internal server error' });
+});
+
+// ── Cron jobs ─────────────────────────────────────────────────
+function registerCronJobs() {
+  // Every 30 seconds — generate embeddings for new memories
+  cron.schedule('*/30 * * * * *', () => processEmbeddingQueue(pool));
+
+  // Every 6 hours — refresh AI summaries for vendors/customers
+  cron.schedule('0 */6 * * *', () => refreshEntityProfiles(pool));
+
+  // Daily at 2am IST (8:30pm UTC) — archive old low-priority memories
+  cron.schedule('30 20 * * *', () => archiveOldMemories(pool));
+
+  console.log('[Cron] 3 Finance Memory jobs registered');
+}
+
+// ── Start ─────────────────────────────────────────────────────
+async function start() {
+  await testConnection();
+  registerCronJobs();
+  app.listen(PORT, () => {
+    console.log(`[Server] Deemona AI Finance OS running on port ${PORT}`);
+    console.log(`[Server] Health: http://localhost:${PORT}/health`);
+  });
+}
+
+start().catch(err => {
+  console.error('[Server] Failed to start:', err.message);
+  process.exit(1);
+});
