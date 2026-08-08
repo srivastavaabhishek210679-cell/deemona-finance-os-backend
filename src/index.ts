@@ -22,6 +22,9 @@ import { createInventoryRouter } from './routes/inventoryRoutes';
 import { createProjectsRouter } from './routes/projectsRoutes';
 import { createComplianceRouter } from './routes/complianceRoutes';
 import { createCRMRouter } from './routes/crmRoutes';
+import { createStatementsRouter } from './routes/statementsRoutes';
+import { createCFOAgentRouter } from './routes/cfoAgentRoutes';
+import { createDocumentAIRouter } from './routes/documentAIRoutes';
 import { createAgentRouter } from './routes/agentRoutes';
 import {
   processEmbeddingQueue,
@@ -74,6 +77,9 @@ app.use('/api/inventory',  createInventoryRouter(pool));
 app.use('/api/projects',   createProjectsRouter(pool));
 app.use('/api/compliance', createComplianceRouter(pool));
 app.use('/api/crm',        createCRMRouter(pool));
+app.use('/api/statements',  createStatementsRouter(pool));
+app.use('/api/cfo',         createCFOAgentRouter(pool));
+app.use('/api/document-ai', createDocumentAIRouter(pool));
 
 // Future routes â€” uncomment as each phase is built:
 // app.use('/api/auth',        authRouter(pool));
@@ -172,4 +178,5 @@ start().catch(err => {
   console.error('[Server] Failed to start:', err.message);
   process.exit(1);
 });
+
 
