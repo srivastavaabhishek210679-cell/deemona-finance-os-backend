@@ -25,6 +25,9 @@ import { createCRMRouter } from './routes/crmRoutes';
 import { createStatementsRouter } from './routes/statementsRoutes';
 import { createCFOAgentRouter } from './routes/cfoAgentRoutes';
 import { createDocumentAIRouter } from './routes/documentAIRoutes';
+import { createAutomationRouter } from './routes/automationRoutes';
+import { createTaxAgentRouter } from './routes/taxAgentRoutes';
+import { createAuditAgentRouter } from './routes/auditAgentRoutes';
 import { createAgentRouter } from './routes/agentRoutes';
 import {
   processEmbeddingQueue,
@@ -80,6 +83,9 @@ app.use('/api/crm',        createCRMRouter(pool));
 app.use('/api/statements',  createStatementsRouter(pool));
 app.use('/api/cfo',         createCFOAgentRouter(pool));
 app.use('/api/document-ai', createDocumentAIRouter(pool));
+app.use('/api/automation',  createAutomationRouter(pool));
+app.use('/api/tax-agent',   createTaxAgentRouter(pool));
+app.use('/api/audit',       createAuditAgentRouter(pool));
 
 // Future routes â€” uncomment as each phase is built:
 // app.use('/api/auth',        authRouter(pool));
@@ -178,5 +184,6 @@ start().catch(err => {
   console.error('[Server] Failed to start:', err.message);
   process.exit(1);
 });
+
 
 

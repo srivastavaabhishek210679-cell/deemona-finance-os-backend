@@ -262,7 +262,7 @@ async function seed() {
       let tGross=0, tDed=0, tNet=0, tPF=0, tTDS=0;
       for (let i=0; i<emps.length; i++) {
         const empRow = emps[i];
-        const basic = empRow[8]; const hra = empRow[9]; const special = empRow[10]; const other = empRow[11]; const pf = empRow[12];
+        const basic = Number(empRow[8]); const hra = Number(empRow[9]); const special = Number(empRow[10]); const other = Number(empRow[11]); const pf = Boolean(empRow[12]);
         const gross = Number(basic)+Number(hra)+Number(special)+Number(other);
         const pfBasic = Math.min(Number(basic), 15000);
         const pfEmp = pf ? Math.round(pfBasic*0.12) : 0;
@@ -511,4 +511,5 @@ async function seed() {
 }
 
 seed().catch(console.error);
+
 
