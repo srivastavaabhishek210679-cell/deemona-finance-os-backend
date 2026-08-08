@@ -28,6 +28,9 @@ import { createDocumentAIRouter } from './routes/documentAIRoutes';
 import { createAutomationRouter } from './routes/automationRoutes';
 import { createTaxAgentRouter } from './routes/taxAgentRoutes';
 import { createAuditAgentRouter } from './routes/auditAgentRoutes';
+import { createMarketplaceRouter } from './routes/marketplaceRoutes';
+import { createTallyRouter } from './routes/tallyRoutes';
+import { createWhatsAppRouter } from './routes/whatsappRoutes';
 import { createAgentRouter } from './routes/agentRoutes';
 import {
   processEmbeddingQueue,
@@ -86,6 +89,9 @@ app.use('/api/document-ai', createDocumentAIRouter(pool));
 app.use('/api/automation',  createAutomationRouter(pool));
 app.use('/api/tax-agent',   createTaxAgentRouter(pool));
 app.use('/api/audit',       createAuditAgentRouter(pool));
+app.use('/api/marketplace', createMarketplaceRouter(pool));
+app.use('/api/tally',       createTallyRouter(pool));
+app.use('/api/whatsapp',    createWhatsAppRouter(pool));
 
 // Future routes â€” uncomment as each phase is built:
 // app.use('/api/auth',        authRouter(pool));
@@ -184,6 +190,7 @@ start().catch(err => {
   console.error('[Server] Failed to start:', err.message);
   process.exit(1);
 });
+
 
 
 
