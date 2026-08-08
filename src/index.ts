@@ -36,6 +36,10 @@ import { createForecastingRouter } from './routes/forecastingRoutes';
 import { createSchedulerRouter } from './routes/schedulerRoutes';
 import { createSDKRouter } from './routes/sdkRoutes';
 import { createAIStudioRouter } from './routes/aiStudioRoutes';
+import { createRBACRouter } from './middleware/rbac';
+import { createBillingRouter } from './routes/billingRoutes';
+import { createAdminRouter } from './routes/adminRoutes';
+import { createDataExportRouter } from './routes/dataExportRoutes';
 import { createAgentRouter } from './routes/agentRoutes';
 import {
   processEmbeddingQueue,
@@ -102,6 +106,10 @@ app.use('/api/forecasting', createForecastingRouter(pool));
 app.use('/api/scheduler',   createSchedulerRouter(pool));
 app.use('/api/sdk',         createSDKRouter(pool));
 app.use('/api/ai-studio',   createAIStudioRouter(pool));
+app.use('/api/rbac',        createRBACRouter(pool));
+app.use('/api/billing',     createBillingRouter(pool));
+app.use('/api/admin',       createAdminRouter(pool));
+app.use('/api/export',      createDataExportRouter(pool));
 
 // Future routes â€” uncomment as each phase is built:
 // app.use('/api/auth',        authRouter(pool));
@@ -200,6 +208,7 @@ start().catch(err => {
   console.error('[Server] Failed to start:', err.message);
   process.exit(1);
 });
+
 
 
 
