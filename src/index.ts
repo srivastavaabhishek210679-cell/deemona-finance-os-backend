@@ -31,6 +31,11 @@ import { createAuditAgentRouter } from './routes/auditAgentRoutes';
 import { createMarketplaceRouter } from './routes/marketplaceRoutes';
 import { createTallyRouter } from './routes/tallyRoutes';
 import { createWhatsAppRouter } from './routes/whatsappRoutes';
+import { createEmailAIRouter } from './routes/emailAIRoutes';
+import { createForecastingRouter } from './routes/forecastingRoutes';
+import { createSchedulerRouter } from './routes/schedulerRoutes';
+import { createSDKRouter } from './routes/sdkRoutes';
+import { createAIStudioRouter } from './routes/aiStudioRoutes';
 import { createAgentRouter } from './routes/agentRoutes';
 import {
   processEmbeddingQueue,
@@ -92,6 +97,11 @@ app.use('/api/audit',       createAuditAgentRouter(pool));
 app.use('/api/marketplace', createMarketplaceRouter(pool));
 app.use('/api/tally',       createTallyRouter(pool));
 app.use('/api/whatsapp',    createWhatsAppRouter(pool));
+app.use('/api/email-ai',    createEmailAIRouter(pool));
+app.use('/api/forecasting', createForecastingRouter(pool));
+app.use('/api/scheduler',   createSchedulerRouter(pool));
+app.use('/api/sdk',         createSDKRouter(pool));
+app.use('/api/ai-studio',   createAIStudioRouter(pool));
 
 // Future routes â€” uncomment as each phase is built:
 // app.use('/api/auth',        authRouter(pool));
@@ -190,6 +200,7 @@ start().catch(err => {
   console.error('[Server] Failed to start:', err.message);
   process.exit(1);
 });
+
 
 
 
