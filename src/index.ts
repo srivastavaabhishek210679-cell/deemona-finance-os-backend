@@ -1,4 +1,4 @@
-import dotenv from 'dotenv';
+﻿import dotenv from 'dotenv';
 dotenv.config();
 
 import express from 'express';
@@ -32,32 +32,32 @@ import {
 const app = express();
 const PORT = parseInt(process.env.PORT ?? '4000');
 
-// ── Security & parsing ────────────────────────────────────────
+// â”€â”€ Security & parsing â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 app.use(helmet());
 app.use(cors({
-  origin: [process.env.FRONTEND_URL ?? 'http://localhost:5173', 'http://localhost:5174'],
+  origin: [process.env.FRONTEND_URL || 'http://localhost:5174', 'http://localhost:5174', 'http://localhost:5173', 'https://deemona-finance-os-frontend.onrender.com'],
   credentials: true,
 }));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
-// ── Rate limiting ─────────────────────────────────────────────
+// â”€â”€ Rate limiting â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 app.use('/api/', rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 500,
   message: { error: 'Too many requests, please try again later.' },
 }));
 
-// ── Health check ──────────────────────────────────────────────
+// â”€â”€ Health check â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok', app: 'Deemona AI Finance OS', timestamp: new Date().toISOString() });
 });
 
-// ── API Routes ────────────────────────────────────────────────
+// â”€â”€ API Routes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Auth
 app.use('/api/auth', createAuthRouter(pool));
 
-// Finance Memory (Phase 1 — active now)
+// Finance Memory (Phase 1 â€” active now)
 app.use('/api/memory', createMemoryRouter(pool));
 
 // Accounting module (Phase A)
@@ -75,7 +75,7 @@ app.use('/api/projects',   createProjectsRouter(pool));
 app.use('/api/compliance', createComplianceRouter(pool));
 app.use('/api/crm',        createCRMRouter(pool));
 
-// Future routes — uncomment as each phase is built:
+// Future routes â€” uncomment as each phase is built:
 // app.use('/api/auth',        authRouter(pool));
 // app.use('/api/accounting',  accountingRouter(pool));
 // app.use('/api/treasury',    treasuryRouter(pool));
@@ -93,7 +93,7 @@ app.use('/api/crm',        createCRMRouter(pool));
 // app.use('/api/twin',        digitalTwinRouter(pool));   // Phase 5
 // app.use('/api/automation',  automationRouter(pool));    // Phase 2
 
-// ── AI Brief endpoint (no auth — for Decision Center) ────────
+// â”€â”€ AI Brief endpoint (no auth â€” for Decision Center) â”€â”€â”€â”€â”€â”€â”€â”€
 app.post('/api/brief', async (req: express.Request, res: express.Response) => {
   try {
     const { prompt } = req.body;
@@ -133,32 +133,32 @@ app.post('/api/brief', async (req: express.Request, res: express.Response) => {
   }
 });
 
-// ── 404 ───────────────────────────────────────────────────────
+// â”€â”€ 404 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 app.use((_req, res) => {
   res.status(404).json({ error: 'Route not found' });
 });
 
-// ── Global error handler ──────────────────────────────────────
+// â”€â”€ Global error handler â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   console.error('[Error]', err.message);
   res.status(500).json({ error: 'Internal server error' });
 });
 
-// ── Cron jobs ─────────────────────────────────────────────────
+// â”€â”€ Cron jobs â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function registerCronJobs() {
-  // Every 30 seconds — generate embeddings for new memories
+  // Every 30 seconds â€” generate embeddings for new memories
   cron.schedule('*/30 * * * * *', () => processEmbeddingQueue(pool));
 
-  // Every 6 hours — refresh AI summaries for vendors/customers
+  // Every 6 hours â€” refresh AI summaries for vendors/customers
   cron.schedule('0 */6 * * *', () => refreshEntityProfiles(pool));
 
-  // Daily at 2am IST (8:30pm UTC) — archive old low-priority memories
+  // Daily at 2am IST (8:30pm UTC) â€” archive old low-priority memories
   cron.schedule('30 20 * * *', () => archiveOldMemories(pool));
 
   console.log('[Cron] 3 Finance Memory jobs registered');
 }
 
-// ── Start ─────────────────────────────────────────────────────
+// â”€â”€ Start â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 async function start() {
   await testConnection();
   registerCronJobs();
@@ -172,3 +172,4 @@ start().catch(err => {
   console.error('[Server] Failed to start:', err.message);
   process.exit(1);
 });
+
