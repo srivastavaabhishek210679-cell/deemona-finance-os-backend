@@ -1,19 +1,19 @@
-import { Router, Request, Response } from 'express';
+﻿import { Router, Request, Response } from 'express';
 import { Pool } from 'pg';
 import { requireAuth } from '../middleware/auth';
 import Anthropic from '@anthropic-ai/sdk';
-import * as multer from 'multer';
+import multer from 'multer';
 import * as fs from 'fs';
 import * as path from 'path';
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-const upload = multer({ dest: '/tmp/uploads/', limits: { fileSize: 10 * 1024 * 1024 } });
+const upload = (multer as any).default ? (multer as any).default({ dest: '/tmp/uploads/', limits: { fileSize: 10 * 1024 * 1024 } }) : (multer as any)({ dest: '/tmp/uploads/', limits: { fileSize: 10 * 1024 * 1024 } });
 
 export function createDocumentAIRouter(pool: Pool): Router {
   const router = Router();
   const tid = (req: Request): string => (req as any).user.tenantId;
 
-  // ── POST /api/document-ai/read-invoice ────────────────────
+  // â”€â”€ POST /api/document-ai/read-invoice â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // Accepts image or PDF, extracts invoice data using Claude Vision
   router.post('/read-invoice', requireAuth, (upload as any).single('file'), async (req: Request, res: Response) => {
     try {
@@ -142,7 +142,7 @@ Return ONLY valid JSON, no markdown, no explanation.`;
     }
   });
 
-  // ── POST /api/document-ai/create-invoice ─────────────────
+  // â”€â”€ POST /api/document-ai/create-invoice â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // Creates AP invoice from extracted data
   router.post('/create-invoice', requireAuth, async (req: Request, res: Response) => {
     const client = await pool.connect();
@@ -211,7 +211,7 @@ Return ONLY valid JSON, no markdown, no explanation.`;
     }
   });
 
-  // ── POST /api/document-ai/analyze-text ───────────────────
+  // â”€â”€ POST /api/document-ai/analyze-text â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // Analyze any financial text/email and extract key info
   router.post('/analyze-text', requireAuth, async (req: Request, res: Response) => {
     try {
@@ -253,3 +253,4 @@ Return only valid JSON.`;
 
   return router;
 }
+
