@@ -1,4 +1,4 @@
-// ============================================================
+﻿// ============================================================
 // Deemona AI Finance OS — Accounting Routes
 // File: src/routes/accountingRoutes.ts
 // Mount: app.use('/api/accounting', accountingRouter(pool))
@@ -60,19 +60,25 @@ export function createAccountingRouter(pool: Pool): Router {
 
     try {
       let created = 0;
+      let skipped = 0;
       for (const acc of defaultAccounts) {
-        await pool.query(
-          `INSERT INTO accounts (tenant_id, code, name, type, sub_type)
-           VALUES ($1, $2, $3, $4, $5)
-           ON CONFLICT (tenant_id, code) DO NOTHING`,
-          [tenantId, acc.code, acc.name, acc.type, acc.sub_type]
+        const exists = await pool.query(
+          `SELECT id FROM accounts WHERE tenant_id=$1 AND code=$2`,
+          [tenantId, acc.code]
         );
-        created++;
+        if (exists.rows.length === 0) {
+          await pool.query(
+            `INSERT INTO accounts (tenant_id, code, name, type, sub_type, opening_balance, is_active)
+             VALUES ($1, $2, $3, $4, $5, 0, TRUE)`,
+            [tenantId, acc.code, acc.name, acc.type, acc.sub_type]
+          );
+          created++;
+        } else { skipped++; }
       }
-      res.json({ success: true, created, message: `${created} default accounts ready` });
+      res.json({ success: true, created, skipped, message: `${created} accounts created` });
     } catch (err) {
       console.error('[Accounting] setup error:', err);
-      res.status(500).json({ error: 'Setup failed' });
+      res.status(500).json({ error: String(err) });
     }
   });
 
@@ -451,3 +457,4 @@ export function createAccountingRouter(pool: Pool): Router {
 
   return router;
 }
+
