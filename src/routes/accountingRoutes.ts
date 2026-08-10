@@ -39,7 +39,7 @@ export function createAccountingRouter(pool: Pool): Router {
       // Equity
       { code: '3000', name: 'Share Capital',             type: 'equity', sub_type: 'equity' },
       { code: '3100', name: 'Retained Earnings',         type: 'equity', sub_type: 'equity' },
-      { code: '3200', name: 'Current Year Profit/Loss',  type: 'equity', sub_type: 'equity' },
+      { code: '3200', name: 'Current Year Profit and Loss',  type: 'equity', sub_type: 'equity' },
       // Income
       { code: '4000', name: 'Sales Revenue',             type: 'income', sub_type: 'operating_income' },
       { code: '4100', name: 'Service Revenue',           type: 'income', sub_type: 'operating_income' },
@@ -457,4 +457,5 @@ export function createAccountingRouter(pool: Pool): Router {
 
   return router;
 }
+
 
