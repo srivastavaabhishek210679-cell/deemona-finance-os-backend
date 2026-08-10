@@ -1,4 +1,4 @@
-// ============================================================
+﻿// ============================================================
 // Deemona AI Finance OS — Procurement Routes
 // File: src/routes/procurementRoutes.ts
 // Mount: app.use('/api/procurement', procurementRouter(pool))
@@ -88,7 +88,9 @@ export function createProcurementRouter(pool: Pool): Router {
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
-      const { vendor_id, expected_date, priority, department, lines, notes } = req.body;
+      const { expected_date, priority, department, lines, notes } = req.body;
+      // Sanitize UUID fields - convert empty string to null
+      const vendor_id = req.body.vendor_id || null;
 
       const subtotal    = lines.reduce((s: number, l: any) => s + parseFloat(l.amount), 0);
       const tax_amount  = subtotal * 0.18; // default 18% GST
@@ -113,8 +115,9 @@ export function createProcurementRouter(pool: Pool): Router {
         await client.query(
           `INSERT INTO po_lines (po_id, description, quantity, unit, unit_price, amount, account_id, hsn_sac, notes)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-          [po.rows[0].id, line.description, line.quantity ?? 1, line.unit ?? 'pcs',
-           line.unit_price, line.amount, line.account_id, line.hsn_sac, line.notes]
+          [po.rows[0].id, line.description, parseFloat(line.quantity) || 1, line.unit || 'pcs',
+           parseFloat(line.unit_price) || 0, parseFloat(line.amount) || 0,
+           line.account_id || null, line.hsn_sac || null, line.notes || null]
         );
       }
 
@@ -278,3 +281,4 @@ export function createProcurementRouter(pool: Pool): Router {
 
   return router;
 }
+
