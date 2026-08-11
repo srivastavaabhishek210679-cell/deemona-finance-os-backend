@@ -195,10 +195,10 @@ ${context}`;
       const { prompt } = req.body;
 
       const [banks, ar, ap, payroll] = await Promise.all([
-        pool.query('SELECT COALESCE(SUM(current_balance),0) as total FROM bank_accounts WHERE tenant_id=\', [tenantId]),
-        pool.query('SELECT COUNT(*) as count, COALESCE(SUM(balance_due),0) as outstanding FROM ar_invoices WHERE tenant_id=\ AND status NOT IN (\,\)', [tenantId,'paid','cancelled']),
-        pool.query('SELECT COUNT(*) as count, COALESCE(SUM(balance_due),0) as outstanding FROM ap_invoices WHERE tenant_id=\ AND status NOT IN (\,\)', [tenantId,'paid','rejected']),
-        pool.query('SELECT COALESCE(SUM(total_gross),0) as monthly FROM payroll_runs WHERE tenant_id=\ AND status=\ ORDER BY year DESC, month DESC LIMIT 1', [tenantId,'paid']),
+        pool.query('SELECT COALESCE(SUM(current_balance),0) as total FROM bank_accounts WHERE tenant_id=$1', [tenantId]),
+        pool.query('SELECT COUNT(*) as count, COALESCE(SUM(balance_due),0) as outstanding FROM ar_invoices WHERE tenant_id=$1 AND status NOT IN ($2,$3)', [tenantId,'paid','cancelled']),
+        pool.query('SELECT COUNT(*) as count, COALESCE(SUM(balance_due),0) as outstanding FROM ap_invoices WHERE tenant_id=$1 AND status NOT IN ($2,$3)', [tenantId,'paid','rejected']),
+        pool.query('SELECT COALESCE(SUM(total_gross),0) as monthly FROM payroll_runs WHERE tenant_id=$1 AND status=$2 ORDER BY year DESC, month DESC LIMIT 1', [tenantId,'paid']),
       ]);
 
       const context = 'Financial snapshot: Cash Rs ' + parseFloat(banks.rows[0].total).toLocaleString('en-IN')
@@ -221,4 +221,5 @@ ${context}`;
 
   return router;
 }
+
 
