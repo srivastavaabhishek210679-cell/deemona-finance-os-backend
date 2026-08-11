@@ -1,4 +1,4 @@
-import { Router, Request, Response } from 'express';
+﻿import { Router, Request, Response } from 'express';
 import { Pool } from 'pg';
 import { requireAuth } from '../middleware/auth';
 import Anthropic from '@anthropic-ai/sdk';
@@ -188,5 +188,37 @@ ${context}`;
     } catch (err) { res.status(500).json({ error: String(err) }); }
   });
 
+  // ── POST /api/cfo/brief ─────────────────────────────────
+  router.post('/brief', requireAuth, async (req: Request, res: Response) => {
+    try {
+      const tenantId = tid(req);
+      const { prompt } = req.body;
+
+      const [banks, ar, ap, payroll] = await Promise.all([
+        pool.query('SELECT COALESCE(SUM(current_balance),0) as total FROM bank_accounts WHERE tenant_id=\', [tenantId]),
+        pool.query('SELECT COUNT(*) as count, COALESCE(SUM(balance_due),0) as outstanding FROM ar_invoices WHERE tenant_id=\ AND status NOT IN (\,\)', [tenantId,'paid','cancelled']),
+        pool.query('SELECT COUNT(*) as count, COALESCE(SUM(balance_due),0) as outstanding FROM ap_invoices WHERE tenant_id=\ AND status NOT IN (\,\)', [tenantId,'paid','rejected']),
+        pool.query('SELECT COALESCE(SUM(total_gross),0) as monthly FROM payroll_runs WHERE tenant_id=\ AND status=\ ORDER BY year DESC, month DESC LIMIT 1', [tenantId,'paid']),
+      ]);
+
+      const context = 'Financial snapshot: Cash Rs ' + parseFloat(banks.rows[0].total).toLocaleString('en-IN')
+        + ', AR outstanding Rs ' + parseFloat(ar.rows[0].outstanding).toLocaleString('en-IN')
+        + ', AP outstanding Rs ' + parseFloat(ap.rows[0].outstanding).toLocaleString('en-IN')
+        + ', Monthly payroll Rs ' + parseFloat(payroll.rows[0].monthly).toLocaleString('en-IN') + '.';
+
+      const finalPrompt = prompt || ('You are CFO of an Indian company. ' + context + ' Give a 100-word executive brief covering financial health, top 3 priorities, and one action item. Plain text only.');
+
+      const response = await anthropic.messages.create({
+        model: 'claude-sonnet-4-6',
+        max_tokens: 300,
+        messages: [{ role: 'user', content: finalPrompt }],
+      });
+
+      const text = response.content[0].type === 'text' ? response.content[0].text : '';
+      res.json({ text });
+    } catch (err) { res.status(500).json({ error: String(err) }); }
+  });
+
   return router;
 }
+
