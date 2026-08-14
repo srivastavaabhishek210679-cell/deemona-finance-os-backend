@@ -130,6 +130,7 @@ export function createMemoryRouter(pool: Pool): Router {
   // GET /api/memory/recent?limit=&module=&type=&minImportance=
   // Recent memory feed
   // ────────────────────────────────────────────────────────
+  // graceful_memory_patch
   router.get('/recent', requireAuth, async (req: Request, res: Response) => {
     try {
       const { limit, module, type, minImportance } = req.query;
@@ -198,6 +199,13 @@ export function createMemoryRouter(pool: Pool): Router {
       console.error('[Memory] queue process error:', err);
       res.status(500).json({ error: 'Queue processing failed' });
     }
+  });
+
+  // Public recent endpoint — returns empty if no auth
+  router.get('/recent-public', async (req, res) => {
+    try {
+      res.json({ memories: [], total: 0 });
+    } catch (err) { res.status(500).json({ error: String(err) }); }
   });
 
   return router;

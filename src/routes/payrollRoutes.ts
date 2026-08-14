@@ -106,6 +106,175 @@ export function createPayrollRouter(pool: Pool): Router {
     finally { client.release(); }
   });
 
+  // payroll_engine_v2
+  // ── POST /api/payroll/run — Real payroll calculation engine ──
+  router.post('/run', requireAuth, async (req, res) => {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const tenantId = tid(req);
+      const { month, year } = req.body;
+      const m = parseInt(month) || new Date().getMonth() + 1;
+      const y = parseInt(year) || new Date().getFullYear();
+
+      // Check if already run
+      const existing = await client.query(
+        'SELECT id FROM payroll_runs WHERE tenant_id=$1 AND month=$2 AND year=$3',
+        [tenantId, m, y]
+      );
+      if (existing.rows.length) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: 'Payroll already run for this month' });
+      }
+
+      // Get all active employees
+      const emps = await client.query(
+        'SELECT * FROM employees WHERE tenant_id=$1 AND status=$2',
+        [tenantId, 'active']
+      );
+
+      let totalGross = 0, totalPF = 0, totalESI = 0, totalTDS = 0, totalNet = 0;
+
+      // Create payroll run
+      const runResult = await client.query(
+        `INSERT INTO payroll_runs (tenant_id, month, year, status, employee_count, total_gross, total_pf, total_esi, total_tds, total_net)
+         VALUES ($1,$2,$3,'draft',$4,0,0,0,0,0) RETURNING id`,
+        [tenantId, m, y, emps.rows.length]
+      );
+      const runId = runResult.rows[0].id;
+
+      // Calculate payslip for each employee
+      for (const emp of emps.rows) {
+        const basic = parseFloat(emp.basic_salary || 0);
+        const hra = parseFloat(emp.hra || 0);
+        const special = parseFloat(emp.special_allowance || 0);
+        const other = parseFloat(emp.other_allowances || 0);
+        const gross = basic + hra + special + other;
+
+        // PF: 12% of basic (employer + employee both 12%)
+        const pfEmployee = emp.pf_applicable ? Math.round(basic * 0.12) : 0;
+        const pfEmployer = emp.pf_applicable ? Math.round(basic * 0.12) : 0;
+
+        // ESI: 0.75% employee on gross if gross <= 21000
+        const esiEmployee = (emp.esic_applicable && gross <= 21000) ? Math.round(gross * 0.0075) : 0;
+        const esiEmployer = (emp.esic_applicable && gross <= 21000) ? Math.round(gross * 0.0325) : 0;
+
+        // TDS: Simplified slab-based annual calculation / 12
+        const annualTaxable = (gross * 12) - (pfEmployee * 12) - 50000; // std deduction
+        let annualTDS = 0;
+        if (annualTaxable > 1500000) annualTDS = 187500 + (annualTaxable - 1500000) * 0.30;
+        else if (annualTaxable > 1200000) annualTDS = 127500 + (annualTaxable - 1200000) * 0.25;
+        else if (annualTaxable > 1000000) annualTDS = 77500 + (annualTaxable - 1000000) * 0.20;
+        else if (annualTaxable > 750000) annualTDS = 27500 + (annualTaxable - 750000) * 0.15;
+        else if (annualTaxable > 500000) annualTDS = 2500 + (annualTaxable - 500000) * 0.10;
+        else if (annualTaxable > 300000) annualTDS = (annualTaxable - 300000) * 0.05;
+        const tds = emp.tds_applicable ? Math.round(Math.max(0, annualTDS) / 12) : 0;
+
+        const totalDeductions = pfEmployee + esiEmployee + tds;
+        const net = gross - totalDeductions;
+
+        // Insert payslip
+        try {
+          await client.query(
+            `INSERT INTO payslips (tenant_id, payroll_run_id, employee_id, employee_code,
+               month, year, basic, hra, special_allowance, other_allowances, gross,
+               pf_employee, pf_employer, esi_employee, esi_employer, tds, total_deductions, net)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
+            [tenantId, runId, emp.id, emp.employee_code, m, y,
+             basic, hra, special, other, gross,
+             pfEmployee, pfEmployer, esiEmployee, esiEmployer, tds, totalDeductions, net]
+          );
+        } catch (psErr) {
+          // payslips table may have different columns — try simplified
+          await client.query(
+            `INSERT INTO payslips (tenant_id, employee_id, month, year, total_gross, total_deductions, net_salary, pf, tds)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+             ON CONFLICT DO NOTHING`,
+            [tenantId, emp.id, m, y, gross, totalDeductions, net, pfEmployee, tds]
+          );
+        }
+
+        totalGross += gross;
+        totalPF += pfEmployee;
+        totalESI += esiEmployee;
+        totalTDS += tds;
+        totalNet += net;
+      }
+
+      // Update payroll run totals
+      await client.query(
+        `UPDATE payroll_runs SET status='calculated', total_gross=$1, total_pf=$2, total_esi=$3, total_tds=$4, total_net=$5, updated_at=NOW()
+         WHERE id=$6`,
+        [totalGross, totalPF, totalESI, totalTDS, totalNet, runId]
+      );
+
+      await client.query('COMMIT');
+      res.json({
+        success: true,
+        run_id: runId,
+        month: m, year: y,
+        employee_count: emps.rows.length,
+        total_gross: totalGross,
+        total_pf: totalPF,
+        total_esi: totalESI,
+        total_tds: totalTDS,
+        total_net: totalNet,
+      });
+    } catch (err) {
+      await client.query('ROLLBACK');
+      res.status(500).json({ error: String(err) });
+    } finally { client.release(); }
+  });
+
+  // ── GET /api/payroll/runs — List all payroll runs ──────────
+  router.get('/runs', requireAuth, async (req, res) => {
+    try {
+      const result = await pool.query(
+        'SELECT * FROM payroll_runs WHERE tenant_id=$1 ORDER BY year DESC, month DESC',
+        [tid(req)]
+      );
+      res.json({ runs: result.rows });
+    } catch (err) { res.status(500).json({ error: String(err) }); }
+  });
+
+  // ── GET /api/payroll/payslips/:runId — Get payslips for a run
+  router.get('/payslips/:runId', requireAuth, async (req, res) => {
+    try {
+      const result = await pool.query(
+        `SELECT p.*, e.first_name, e.last_name, e.department, e.designation
+         FROM payslips p JOIN employees e ON e.id = p.employee_id
+         WHERE p.tenant_id=$1 AND p.payroll_run_id=$2
+         ORDER BY e.department, e.first_name`,
+        [tid(req), req.params.runId]
+      );
+      res.json({ payslips: result.rows });
+    } catch (err) { res.status(500).json({ error: String(err) }); }
+  });
+
+  // ── PATCH /api/payroll/runs/:id/approve — Approve payroll run
+  router.patch('/runs/:id/approve', requireAuth, async (req, res) => {
+    try {
+      const result = await pool.query(
+        `UPDATE payroll_runs SET status='approved', approved_by=$1, approved_at=NOW(), updated_at=NOW()
+         WHERE id=$2 AND tenant_id=$3 RETURNING *`,
+        [(req as any).user.id, req.params.id, tid(req)]
+      );
+      res.json({ run: result.rows[0] });
+    } catch (err) { res.status(500).json({ error: String(err) }); }
+  });
+
+  // ── PATCH /api/payroll/runs/:id/pay — Mark as paid
+  router.patch('/runs/:id/pay', requireAuth, async (req, res) => {
+    try {
+      const result = await pool.query(
+        `UPDATE payroll_runs SET status='paid', paid_at=NOW(), updated_at=NOW()
+         WHERE id=$2 AND tenant_id=$3 RETURNING *`,
+        [req.params.id, tid(req)]
+      );
+      res.json({ run: result.rows[0] });
+    } catch (err) { res.status(500).json({ error: String(err) }); }
+  });
+
   return router;
 }
 

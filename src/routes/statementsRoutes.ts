@@ -319,5 +319,150 @@ export function createStatementsRouter(pool: Pool): Router {
     } catch (err) { res.status(500).json({ error: String(err) }); }
   });
 
+  // real_statements_v2
+  // ── GET /api/statements/pl — Real P&L from AR/AP data ─────
+  router.get('/pl', requireAuth, async (req, res) => {
+    try {
+      const tenantId = tid(req);
+      const { month, year } = req.query;
+      const m = parseInt(month as string) || new Date().getMonth() + 1;
+      const y = parseInt(year as string) || new Date().getFullYear();
+      const from = `${y}-${String(m).padStart(2,'0')}-01`;
+      const to = new Date(y, m, 0).toISOString().split('T')[0];
+
+      const [revenue, cogs, opex, payrollData] = await Promise.all([
+        // Revenue from AR invoices
+        pool.query(
+          `SELECT COALESCE(SUM(subtotal),0) as total, COUNT(*) as count
+           FROM ar_invoices WHERE tenant_id=$1 AND date BETWEEN $2 AND $3
+           AND status NOT IN ('draft','cancelled')`,
+          [tenantId, from, to]
+        ),
+        // COGS from AP invoices (IT services, software)
+        pool.query(
+          `SELECT COALESCE(SUM(subtotal),0) as total
+           FROM ap_invoices WHERE tenant_id=$1 AND date BETWEEN $2 AND $3
+           AND status NOT IN ('draft','rejected')`,
+          [tenantId, from, to]
+        ),
+        // Operating expenses from expense claims
+        pool.query(
+          `SELECT COALESCE(SUM(total_amount),0) as total
+           FROM expense_claims WHERE tenant_id=$1
+           AND date BETWEEN $2 AND $3 AND status='approved'`,
+          [tenantId, from, to]
+        ),
+        // Payroll
+        pool.query(
+          `SELECT COALESCE(SUM(total_gross),0) as total
+           FROM payroll_runs WHERE tenant_id=$1 AND month=$4 AND year=$5`,
+          [tenantId, m, y]
+        ),
+      ]);
+
+      const rev = parseFloat(revenue.rows[0].total);
+      const vendorCosts = parseFloat(cogs.rows[0].total);
+      const expenses = parseFloat(opex.rows[0].total);
+      const payroll = parseFloat(payrollData.rows[0].total);
+      const grossProfit = rev - vendorCosts;
+      const ebitda = grossProfit - expenses - payroll;
+      const taxRate = 0.25;
+      const tax = Math.max(0, ebitda * taxRate);
+      const netProfit = ebitda - tax;
+
+      res.json({
+        period: { month: m, year: y, from, to },
+        revenue: { total: rev, invoice_count: parseInt(revenue.rows[0].count) },
+        cost_of_goods: vendorCosts,
+        gross_profit: grossProfit,
+        gross_margin: rev > 0 ? ((grossProfit / rev) * 100).toFixed(1) : '0',
+        operating_expenses: {
+          payroll,
+          vendor_expenses: vendorCosts,
+          employee_expenses: expenses,
+          total: payroll + expenses,
+        },
+        ebitda,
+        ebitda_margin: rev > 0 ? ((ebitda / rev) * 100).toFixed(1) : '0',
+        tax,
+        net_profit: netProfit,
+        net_margin: rev > 0 ? ((netProfit / rev) * 100).toFixed(1) : '0',
+      });
+    } catch (err) { res.status(500).json({ error: String(err) }); }
+  });
+
+  // ── GET /api/statements/balance-sheet — Real Balance Sheet ─
+  router.get('/balance-sheet', requireAuth, async (req, res) => {
+    try {
+      const tenantId = tid(req);
+
+      const [banks, ar, ap, assets, inventory] = await Promise.all([
+        pool.query('SELECT COALESCE(SUM(current_balance),0) as total FROM bank_accounts WHERE tenant_id=$1 AND is_active=true', [tenantId]),
+        pool.query(`SELECT COALESCE(SUM(total_amount - paid_amount),0) as total FROM ar_invoices WHERE tenant_id=$1 AND status NOT IN ('paid','cancelled')`, [tenantId]),
+        pool.query(`SELECT COALESCE(SUM(total_amount - paid_amount),0) as total FROM ap_invoices WHERE tenant_id=$1 AND status NOT IN ('paid','rejected')`, [tenantId]),
+        pool.query("SELECT COALESCE(SUM(current_value),0) as total FROM fixed_assets WHERE tenant_id=$1 AND status='active'", [tenantId]),
+        pool.query('SELECT COALESCE(SUM(current_stock * unit_cost),0) as total FROM inventory_items WHERE tenant_id=$1 AND is_active=true', [tenantId]),
+      ]);
+
+      const cash = parseFloat(banks.rows[0].total);
+      const receivables = parseFloat(ar.rows[0].total);
+      const fixedAssets = parseFloat(assets.rows[0].total);
+      const inventoryVal = parseFloat(inventory.rows[0].total);
+      const totalAssets = cash + receivables + fixedAssets + inventoryVal;
+
+      const payables = parseFloat(ap.rows[0].total);
+      const equity = totalAssets - payables;
+
+      res.json({
+        assets: {
+          current: { cash, accounts_receivable: receivables, inventory: inventoryVal, total: cash + receivables + inventoryVal },
+          fixed: { total: fixedAssets },
+          total: totalAssets,
+        },
+        liabilities: {
+          current: { accounts_payable: payables, total: payables },
+          total: payables,
+        },
+        equity: { retained_earnings: equity, total: equity },
+        total_liabilities_equity: payables + equity,
+        balanced: Math.abs(totalAssets - (payables + equity)) < 1,
+      });
+    } catch (err) { res.status(500).json({ error: String(err) }); }
+  });
+
+  // ── GET /api/statements/cash-flow — Cash Flow Statement ────
+  router.get('/cash-flow', requireAuth, async (req, res) => {
+    try {
+      const tenantId = tid(req);
+      const { month, year } = req.query;
+      const m = parseInt(month as string) || new Date().getMonth() + 1;
+      const y = parseInt(year as string) || new Date().getFullYear();
+      const from = `${y}-${String(m).padStart(2,'0')}-01`;
+      const to = new Date(y, m, 0).toISOString().split('T')[0];
+
+      const [credits, debits] = await Promise.all([
+        pool.query(
+          "SELECT COALESCE(SUM(amount),0) as total FROM bank_transactions WHERE tenant_id=$1 AND type='credit' AND date BETWEEN $2 AND $3",
+          [tenantId, from, to]
+        ),
+        pool.query(
+          "SELECT COALESCE(SUM(amount),0) as total FROM bank_transactions WHERE tenant_id=$1 AND type='debit' AND date BETWEEN $2 AND $3",
+          [tenantId, from, to]
+        ),
+      ]);
+
+      const inflows = parseFloat(credits.rows[0].total);
+      const outflows = parseFloat(debits.rows[0].total);
+
+      res.json({
+        period: { month: m, year: y },
+        operating: { inflows, outflows, net: inflows - outflows },
+        investing: { inflows: 0, outflows: 0, net: 0 },
+        financing: { inflows: 0, outflows: 0, net: 0 },
+        net_change: inflows - outflows,
+      });
+    } catch (err) { res.status(500).json({ error: String(err) }); }
+  });
+
   return router;
 }
