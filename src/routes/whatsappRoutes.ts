@@ -1,314 +1,101 @@
 import { Router, Request, Response } from 'express';
 import { Pool } from 'pg';
 import { requireAuth } from '../middleware/auth';
-import Anthropic from '@anthropic-ai/sdk';
 
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+const TWILIO_SID   = process.env.TWILIO_ACCOUNT_SID;
+const TWILIO_TOKEN = process.env.TWILIO_AUTH_TOKEN;
+const TWILIO_FROM  = process.env.TWILIO_WHATSAPP_FROM || 'whatsapp:+14155238886';
 
-// WhatsApp message templates for finance alerts
-const TEMPLATES = {
-  invoice_approval: (data: any) => `*Invoice Approval Required* ✅
-  
-Vendor: ${data.vendor_name}
-Invoice No: ${data.invoice_number}
-Amount: ₹${parseFloat(data.amount).toLocaleString('en-IN')}
-Due Date: ${data.due_date}
+async function sendWA(to: string, message: string) {
+  if (!TWILIO_SID || !TWILIO_TOKEN) {
+    return { success: false, error: 'TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN not set in environment variables' };
+  }
+  const toNum = to.startsWith('whatsapp:') ? to : `whatsapp:+91${to.replace(/\D/g,'').slice(-10)}`;
+  try {
+    const body = new URLSearchParams({ From: TWILIO_FROM, To: toNum, Body: message });
+    const res = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${TWILIO_SID}/Messages.json`, {
+      method: 'POST',
+      headers: {
+        'Authorization': 'Basic ' + Buffer.from(`${TWILIO_SID}:${TWILIO_TOKEN}`).toString('base64'),
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: body.toString(),
+    });
+    const data = await res.json() as any;
+    if (data.sid) return { success: true, sid: data.sid };
+    return { success: false, error: data.message || JSON.stringify(data) };
+  } catch (err) {
+    return { success: false, error: String(err) };
+  }
+}
 
-Please approve or reject within 24 hours.
-Reply *APPROVE ${data.invoice_id}* or *REJECT ${data.invoice_id}*`,
-
-  payment_confirmation: (data: any) => `*Payment Confirmed* 💳
-
-Paid to: ${data.vendor_name}
-Amount: ₹${parseFloat(data.amount).toLocaleString('en-IN')}
-Reference: ${data.reference}
-Date: ${data.date}
-
-Your invoice has been settled. Thank you!`,
-
-  overdue_alert: (data: any) => `*Overdue Invoice Alert* ⚠️
-
-Customer: ${data.customer_name}
-Invoice: ${data.invoice_number}
-Amount Due: ₹${parseFloat(data.amount).toLocaleString('en-IN')}
-Overdue By: ${data.days_overdue} days
-
-Please make payment immediately to avoid service disruption.`,
-
-  gst_reminder: (data: any) => `*GST Filing Reminder* 🧾
-
-Filing: ${data.filing_type}
-Period: ${data.period}
-Due Date: ${data.due_date}
-Estimated Liability: ₹${parseFloat(data.amount).toLocaleString('en-IN')}
-
-File before ${data.due_date} to avoid penalty of ₹50/day.`,
-
-  payroll_processed: (data: any) => `*Payroll Processed* 👥
-
-Month: ${data.month}
-Employees: ${data.count}
-Total Net Pay: ₹${parseFloat(data.total_net).toLocaleString('en-IN')}
-Status: ${data.status}
-
-Payslips have been sent to all employees.`,
-
-  expense_approved: (data: any) => `*Expense Claim Approved* ✅
-
-Claim: ${data.claim_number}
-Amount: ₹${parseFloat(data.amount).toLocaleString('en-IN')}
-Approved by: ${data.approved_by}
-
-Reimbursement will be credited with next payroll.`,
-
-  low_cash_alert: (data: any) => `*Low Cash Alert* 🚨
-
-Current Balance: ₹${parseFloat(data.balance).toLocaleString('en-IN')}
-Runway: ${data.runway_months} months
-Monthly Burn: ₹${parseFloat(data.burn).toLocaleString('en-IN')}
-
-Action required: Review cash flow immediately.`,
-
-  compliance_deadline: (data: any) => `*Compliance Deadline* ⏰
-
-Filing: ${data.filing}
-Due: ${data.due_date}
-Penalty if missed: ${data.penalty}
-
-Complete filing immediately to avoid penalties.`,
+const TEMPLATES: Record<string, (d: any) => string> = {
+  invoice_approval: d => `*Deemona Finance* - Approval Required\n\nInvoice: ${d.invoice_number}\nAmount: Rs ${parseFloat(d.amount||0).toLocaleString('en-IN')}\nVendor: ${d.vendor}\nDue: ${d.due_date}\n\nApprove at: https://deemona-finance-os-frontend.onrender.com/accounting\n\nReply APPROVE or REJECT`,
+  payment_received: d => `Payment Received\n\nInvoice: ${d.invoice_number}\nAmount: Rs ${parseFloat(d.amount||0).toLocaleString('en-IN')}\nFrom: ${d.customer}`,
+  gst_reminder:     d => `GST Filing Reminder\n\n${d.filing_type} for ${d.period} due on ${d.due_date}\nEstimated: Rs ${parseFloat(d.amount||0).toLocaleString('en-IN')}`,
+  payroll_approved: d => `Payroll Approved\n\nMonth: ${d.month} ${d.year}\nEmployees: ${d.count}\nTotal: Rs ${parseFloat(d.amount||0).toLocaleString('en-IN')}`,
+  low_cash_alert:   d => `Cash Alert\n\nCurrent position: Rs ${parseFloat(d.cash||0).toLocaleString('en-IN')}\nRunway: ${d.runway} months`,
+  custom:           d => d.message || 'Message from Deemona Finance',
 };
 
 export function createWhatsAppRouter(pool: Pool): Router {
   const router = Router();
   const tid = (req: Request): string => (req as any).user.tenantId;
 
-  // ── GET /api/whatsapp/config ──────────────────────────────
-  router.get('/config', requireAuth, async (req: Request, res: Response) => {
-    try {
-      const tenantId = tid(req);
-      let config = null;
-      try {
-        const result = await pool.query(
-          `SELECT * FROM whatsapp_config WHERE tenant_id=$1`,
-          [tenantId]
-        );
-        config = result.rows[0] || null;
-      } catch { config = null; }
-
-      res.json({
-        configured: !!config,
-        config: config ? {
-          phone_number: config.phone_number,
-          provider: config.provider || 'twilio',
-          is_active: config.is_active,
-          notifications: config.notifications || {
-            invoice_approval: true,
-            payment_confirmation: true,
-            overdue_alerts: true,
-            gst_reminders: true,
-            payroll_processed: true,
-            expense_approved: false,
-            low_cash_alert: true,
-            compliance_deadline: true,
-          },
-        } : null,
-        providers: [
-          { id: 'twilio', name: 'Twilio WhatsApp', description: 'Official WhatsApp Business API via Twilio', setup_url: 'https://www.twilio.com/whatsapp' },
-          { id: 'wati', name: 'WATI', description: 'India-focused WhatsApp Business platform', setup_url: 'https://www.wati.io' },
-          { id: 'interakt', name: 'Interakt', description: 'Popular India WhatsApp BSP', setup_url: 'https://www.interakt.shop' },
-          { id: 'gupshup', name: 'Gupshup', description: 'Enterprise WhatsApp messaging', setup_url: 'https://www.gupshup.io' },
-        ],
-      });
-    } catch (err) { res.status(500).json({ error: String(err) }); }
-  });
-
-  // ── POST /api/whatsapp/config ─────────────────────────────
-  router.post('/config', requireAuth, async (req: Request, res: Response) => {
-    try {
-      const tenantId = tid(req);
-      const { phone_number, provider, api_key, notifications } = req.body;
-
-      await pool.query(
-        `INSERT INTO whatsapp_config (tenant_id, phone_number, provider, api_key, notifications, is_active)
-         VALUES ($1,$2,$3,$4,$5,TRUE)
-         ON CONFLICT (tenant_id) DO UPDATE SET phone_number=$2, provider=$3, api_key=$4, notifications=$5, is_active=TRUE, updated_at=NOW()`,
-        [tenantId, phone_number, provider, api_key, JSON.stringify(notifications)]
-      ).catch(() => {
-        // Table may not exist — just return success
-      });
-
-      res.json({ success: true, message: 'WhatsApp configuration saved' });
-    } catch (err) { res.status(500).json({ error: String(err) }); }
-  });
-
-  // ── POST /api/whatsapp/send ───────────────────────────────
   router.post('/send', requireAuth, async (req: Request, res: Response) => {
     try {
-      const tenantId = tid(req);
-      const { to, template, data, custom_message } = req.body;
-
-      if (!to) { res.status(400).json({ error: 'to (phone number) is required' }); return; }
-
-      let message = custom_message;
-      if (!message && template && TEMPLATES[template as keyof typeof TEMPLATES]) {
-        message = TEMPLATES[template as keyof typeof TEMPLATES](data || {});
-      }
-      if (!message) { res.status(400).json({ error: 'Either custom_message or valid template required' }); return; }
-
-      // Check if Twilio is configured
-      const twilioSid  = process.env.TWILIO_ACCOUNT_SID;
-      const twilioAuth = process.env.TWILIO_AUTH_TOKEN;
-      const twilioFrom = process.env.TWILIO_WHATSAPP_FROM || 'whatsapp:+14155238886';
-
-      if (twilioSid && twilioAuth) {
-        // Send via Twilio
-        const response = await fetch(
-          `https://api.twilio.com/2010-04-01/Accounts/${twilioSid}/Messages.json`,
-          {
-            method: 'POST',
-            headers: {
-              'Authorization': 'Basic ' + Buffer.from(`${twilioSid}:${twilioAuth}`).toString('base64'),
-              'Content-Type': 'application/x-www-form-urlencoded',
-            },
-            body: new URLSearchParams({
-              From: twilioFrom,
-              To: `whatsapp:${to}`,
-              Body: message,
-            }),
-          }
-        );
-        const result = await response.json() as any;
-        if (!response.ok) throw new Error(result.message || 'Twilio error');
-
-        // Log message
-        await pool.query(
-          `INSERT INTO whatsapp_messages (tenant_id, to_number, message, template, status, provider_message_id) VALUES ($1,$2,$3,$4,'sent',$5)`,
-          [tenantId, to, message, template||'custom', result.sid]
-        ).catch(() => {});
-
-        res.json({ success: true, message_id: result.sid, status: 'sent' });
-      } else {
-        // Simulate (no Twilio configured)
-        console.log(`[WhatsApp] Would send to ${to}:\n${message}`);
-        await pool.query(
-          `INSERT INTO whatsapp_messages (tenant_id, to_number, message, template, status) VALUES ($1,$2,$3,$4,'simulated')`,
-          [tenantId, to, message, template||'custom']
-        ).catch(() => {});
-        res.json({ success: true, message_id: `sim_${Date.now()}`, status: 'simulated', note: 'Configure TWILIO_ACCOUNT_SID to send real messages' });
-      }
+      const { to, template, data, message } = req.body;
+      if (!to) return res.status(400).json({ error: 'Phone number required' }) as any;
+      const fn = TEMPLATES[template] || TEMPLATES.custom;
+      const body = message || fn({ ...data, message });
+      const result = await sendWA(to, body);
+      // Log
+      await pool.query(
+        `INSERT INTO whatsapp_logs (tenant_id, to_number, template, message, status, twilio_sid, sent_at)
+         VALUES ($1,$2,$3,$4,$5,$6,NOW()) ON CONFLICT DO NOTHING`,
+        [tid(req), to, template||'custom', body, result.success?'sent':'failed', (result as any).sid||null]
+      ).catch(()=>{});
+      res.json(result);
     } catch (err) { res.status(500).json({ error: String(err) }); }
   });
 
-  // ── GET /api/whatsapp/templates ───────────────────────────
-  router.get('/templates', requireAuth, async (_req: Request, res: Response) => {
-    const templates = Object.entries(TEMPLATES).map(([id, fn]) => ({
-      id,
-      name: id.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
-      preview: fn({
-        vendor_name: 'Acme Ltd', invoice_number: 'INV-001', amount: 150000,
-        due_date: '2026-08-15', invoice_id: 'uuid-here', customer_name: 'XYZ Corp',
-        days_overdue: 15, filing_type: 'GSTR-3B', period: 'July 2026',
-        month: 'July 2026', count: 15, total_net: 2500000, status: 'Completed',
-        claim_number: 'EXP-001', approved_by: 'Arjun Mehta', balance: 5000000,
-        runway_months: 8, burn: 600000, filing: 'GSTR-3B', penalty: 'Rs 50/day',
-        reference: 'TXN123456', date: '2026-08-08',
-      }),
-    }));
-    res.json({ templates });
-  });
-
-  // ── GET /api/whatsapp/messages ────────────────────────────
-  router.get('/messages', requireAuth, async (req: Request, res: Response) => {
+  router.post('/bulk', requireAuth, async (req: Request, res: Response) => {
     try {
-      const tenantId = tid(req);
-      let messages: any[] = [];
-      try {
-        const result = await pool.query(
-          `SELECT * FROM whatsapp_messages WHERE tenant_id=$1 ORDER BY created_at DESC LIMIT 50`,
-          [tenantId]
-        );
-        messages = result.rows;
-      } catch { messages = []; }
-      res.json({ messages });
+      const { numbers, template, data } = req.body;
+      if (!numbers?.length) return res.status(400).json({ error: 'Numbers array required' }) as any;
+      const fn = TEMPLATES[template] || TEMPLATES.custom;
+      const body = fn(data || {});
+      const results = await Promise.allSettled(numbers.map((n: string) => sendWA(n, body)));
+      const sent = results.filter(r => r.status === 'fulfilled' && (r.value as any).success).length;
+      res.json({ sent, failed: results.length - sent, total: results.length });
     } catch (err) { res.status(500).json({ error: String(err) }); }
   });
 
-  // ── POST /api/whatsapp/ai-message ────────────────────────
-  // Generate a custom WhatsApp message using AI
-  router.post('/ai-message', requireAuth, async (req: Request, res: Response) => {
-    try {
-      const { context, recipient, tone = 'professional' } = req.body;
-      if (!context) { res.status(400).json({ error: 'context is required' }); return; }
-
-      const response = await anthropic.messages.create({
-        model: 'claude-sonnet-4-6',
-        max_tokens: 400,
-        messages: [{
-          role: 'user',
-          content: `Write a WhatsApp message for Indian business finance context.
-Recipient: ${recipient || 'business contact'}
-Tone: ${tone}
-Context: ${context}
-
-Rules:
-- Keep it under 200 words
-- Use Indian Rs symbol (₹) for amounts
-- Include relevant emoji
-- Be clear and actionable
-- End with a specific call to action
-- Format for WhatsApp (use *bold* for emphasis)
-
-Write only the message, no explanation.`,
-        }],
-      });
-
-      const message = response.content[0].type === 'text' ? response.content[0].text : '';
-      res.json({ message });
-    } catch (err) { res.status(500).json({ error: String(err) }); }
+  router.get('/templates', requireAuth, async (_req, res) => {
+    res.json({ templates: Object.keys(TEMPLATES).map(id => ({ id, name: id.replace(/_/g,' ') })) });
   });
 
-  // ── POST /api/whatsapp/bulk-alert ────────────────────────
-  // Send alerts to multiple contacts
-  router.post('/bulk-alert', requireAuth, async (req: Request, res: Response) => {
+  router.get('/logs', requireAuth, async (req: Request, res: Response) => {
     try {
-      const tenantId = tid(req);
-      const { alert_type } = req.body;
+      const r = await pool.query('SELECT * FROM whatsapp_logs WHERE tenant_id=$1 ORDER BY sent_at DESC LIMIT 50', [tid(req)]);
+      res.json({ logs: r.rows });
+    } catch { res.json({ logs: [] }); }
+  });
 
-      const results: any[] = [];
+  router.get('/status', requireAuth, async (_req, res) => {
+    const configured = !!(TWILIO_SID && TWILIO_TOKEN);
+    res.json({
+      configured,
+      from_number: TWILIO_FROM,
+      message: configured ? 'WhatsApp ready to send' : 'Add TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN to Render environment variables',
+    });
+  });
 
-      if (alert_type === 'overdue_ar') {
-        const overdue = await pool.query(
-          `SELECT ar.*, c.name as customer_name, c.phone as customer_phone
-           FROM ar_invoices ar JOIN customers c ON c.id=ar.customer_id
-           WHERE ar.tenant_id=$1 AND ar.status NOT IN ('paid','cancelled')
-           AND ar.due_date < CURRENT_DATE`,
-          [tenantId]
-        );
-
-        for (const inv of overdue.rows) {
-          if (!inv.customer_phone) continue;
-          const days = Math.floor((Date.now() - new Date(inv.due_date).getTime()) / 86400000);
-          results.push({
-            customer: inv.customer_name,
-            phone: inv.customer_phone,
-            invoice: inv.invoice_number,
-            amount: inv.balance_due,
-            days_overdue: days,
-            message_queued: true,
-          });
-        }
-      } else if (alert_type === 'compliance_deadlines') {
-        const items = await pool.query(
-          `SELECT * FROM compliance_items WHERE tenant_id=$1 AND status='pending' AND due_date <= CURRENT_DATE + INTERVAL '7 days'`,
-          [tenantId]
-        );
-        for (const item of items.rows) {
-          results.push({ title: item.title, due_date: item.due_date, penalty: item.penalty_if_missed, queued: true });
-        }
-      }
-
-      res.json({ alert_type, results, total_queued: results.length });
-    } catch (err) { res.status(500).json({ error: String(err) }); }
+  router.post('/webhook', async (req: Request, res: Response) => {
+    const { Body, From } = req.body;
+    console.log('[WhatsApp webhook] From:', From, 'Body:', Body);
+    res.set('Content-Type', 'text/xml');
+    res.send('<Response><Message>Thank you! Your response has been recorded in Deemona Finance.</Message></Response>');
   });
 
   return router;
