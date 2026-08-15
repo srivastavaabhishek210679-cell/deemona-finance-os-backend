@@ -50,6 +50,7 @@ import {
 } from './jobs/memoryCron';
 
 const app = express();
+app.set('trust proxy', 1); // Required for Render/reverse proxy
 const PORT = parseInt(process.env.PORT ?? '4000');
 
 // â”€â”€ Security & parsing â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -212,6 +213,7 @@ start().catch(err => {
   console.error('[Server] Failed to start:', err.message);
   process.exit(1);
 });
+
 
 
 
