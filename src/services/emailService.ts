@@ -1,4 +1,4 @@
-import Anthropic from '@anthropic-ai/sdk';
+﻿import Anthropic from '@anthropic-ai/sdk';
 
 const SENDGRID_KEY = process.env.SENDGRID_API_KEY;
 const FROM_EMAIL = process.env.FROM_EMAIL || 'noreply@deemona.com';
@@ -106,4 +106,12 @@ export function payslipEmailTemplate(payslip: any, employee: any): string {
   <div class="row"><span class="total">Net Pay</span><span class="total">Rs ${parseFloat(payslip.net||0).toLocaleString('en-IN')}</span></div>
   <p style="font-size:12px;color:#94A3B8;margin-top:20px;text-align:center">Deemona AI Finance OS | Confidential Payslip</p>
 </div></body></html>`;
+}
+
+export async function sendPasswordResetEmail(to: string, resetLink: string): Promise<{ success: boolean }> {
+  return sendEmail({
+    to,
+    subject: 'Reset your Deemona password',
+    text: `Click this link to reset your password: ${resetLink}`
+  });
 }

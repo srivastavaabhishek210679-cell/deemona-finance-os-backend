@@ -1,4 +1,4 @@
-import { Router, Request, Response } from 'express';
+﻿import { Router, Request, Response } from 'express';
 import { Pool } from 'pg';
 import { requireAuth } from '../middleware/auth';
 
@@ -35,7 +35,7 @@ export function createNotificationRouter(pool: Pool): Router {
       if (parseInt(payResult.rows[0].pending) > 0) {
         notifications.push({ id: 3, type: 'info', title: 'Pending Approvals', message: `${payResult.rows[0].pending} expense claims waiting for your approval.`, created_at: now, read_at: null });
       }
-      notifications.push({ id: 4, type: 'success', title: 'System Ready', message: 'Deemona AI Finance OS is running normally. All modules active.', created_at: new Date(now - 3600000), read_at: new Date() });
+      notifications.push({ id: 4, type: 'success', title: 'System Ready', message: 'Deemona AI Finance OS is running normally. All modules active.', created_at: new Date(now.getTime() - 3600000), read_at: new Date() });
 
       res.json({ notifications, unread: notifications.filter(n => !n.read_at).length });
     }
@@ -71,3 +71,4 @@ export function createNotificationRouter(pool: Pool): Router {
 
   return router;
 }
+
