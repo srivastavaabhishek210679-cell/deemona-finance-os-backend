@@ -23,6 +23,7 @@ async function sendWA(to: string, message: string) {
       body: body.toString(),
     });
     const data = await res.json() as any;
+    console.log('[WhatsApp] Twilio response:', JSON.stringify(data));
     if (data.sid) return { success: true, sid: data.sid };
     return { success: false, error: data.message || JSON.stringify(data) };
   } catch (err) {
