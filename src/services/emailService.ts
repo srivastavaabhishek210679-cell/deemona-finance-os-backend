@@ -108,10 +108,12 @@ export function payslipEmailTemplate(payslip: any, employee: any): string {
 </div></body></html>`;
 }
 
-export async function sendPasswordResetEmail(to: string, resetLink: string): Promise<{ success: boolean }> {
+export async function sendPasswordResetEmail(to: string, name: string, otp: string, expiryMinutes: number): Promise<{ success: boolean }> {
   return sendEmail({
     to,
-    subject: 'Reset your Deemona password',
-    text: `Click this link to reset your password: ${resetLink}`
+    subject: 'Your Deemona Password Reset OTP',
+    text: `Hi , your OTP to reset your password is: . This OTP expires in  minutes.`,
+    html: `<div style='font-family:Inter,sans-serif;padding:24px'><h2 style='color:#1B4FD8'>Password Reset OTP</h2><p>Hi ,</p><p>Your OTP is: <strong style='font-size:24px;color:#1B4FD8'></strong></p><p>Expires in  minutes.</p><p style='color:#94A3B8;font-size:12px'>Deemona AI Finance OS</p></div>`
   });
 }
+
