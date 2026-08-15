@@ -1,119 +1,136 @@
-﻿import Anthropic from '@anthropic-ai/sdk';
+// ============================================================
+// Email Service using Resend (resend.com)
+// Env: RESEND_API_KEY, FROM_EMAIL, FROM_NAME
+// ============================================================
 
-const SENDGRID_KEY = process.env.SENDGRID_API_KEY;
+const RESEND_KEY = process.env.RESEND_API_KEY;
 const FROM_EMAIL = process.env.FROM_EMAIL || 'noreply@deemona.com';
-const FROM_NAME = process.env.FROM_NAME || 'Deemona Finance OS';
+const FROM_NAME  = process.env.FROM_NAME  || 'Deemona Finance OS';
 
 export interface EmailOptions {
   to: string | string[];
   subject: string;
   html?: string;
   text?: string;
-  attachments?: Array<{ filename: string; content: string; type: string }>;
 }
 
-export async function sendEmail(opts: EmailOptions): Promise<{ success: boolean; messageId?: string; error?: string }> {
-  if (!SENDGRID_KEY) {
-    console.log('[Email] SendGrid not configured. Would send to:', opts.to, '| Subject:', opts.subject);
-    return { success: false, error: 'SENDGRID_API_KEY not set in environment' };
+export async function sendEmail(opts: EmailOptions): Promise<{ success: boolean; id?: string; error?: string }> {
+  if (!RESEND_KEY) {
+    console.log('[Email] RESEND_API_KEY not set. Would send to:', opts.to, '| Subject:', opts.subject);
+    return { success: false, error: 'RESEND_API_KEY not configured' };
   }
 
   const toArray = Array.isArray(opts.to) ? opts.to : [opts.to];
 
   try {
-    const res = await fetch('https://api.sendgrid.com/v3/mail/send', {
+    const res = await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${SENDGRID_KEY}`,
+        'Authorization': `Bearer ${RESEND_KEY}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        personalizations: [{ to: toArray.map(email => ({ email })), subject: opts.subject }],
-        from: { email: FROM_EMAIL, name: FROM_NAME },
-        content: [
-          opts.html ? { type: 'text/html', value: opts.html } : null,
-          opts.text ? { type: 'text/plain', value: opts.text } : null,
-        ].filter(Boolean),
-        attachments: opts.attachments || [],
+        from: `${FROM_NAME} <${FROM_EMAIL}>`,
+        to: toArray,
+        subject: opts.subject,
+        html: opts.html || `<p>${opts.text || ''}</p>`,
+        text: opts.text,
       }),
     });
 
-    if (res.ok || res.status === 202) {
-      return { success: true, messageId: res.headers.get('X-Message-Id') || undefined };
+    const data = await res.json() as any;
+
+    if (data.id) {
+      console.log('[Email] Sent successfully. ID:', data.id);
+      return { success: true, id: data.id };
     }
-    const err = await res.json() as any;
-    return { success: false, error: err.errors?.[0]?.message || 'SendGrid error' };
+    console.error('[Email] Resend error:', data);
+    return { success: false, error: data.message || JSON.stringify(data) };
   } catch (err) {
+    console.error('[Email] Fetch error:', err);
     return { success: false, error: String(err) };
   }
 }
 
-// ── Email Templates ───────────────────────────────────────────
-export function invoiceEmailTemplate(invoice: any): string {
-  return `
-<!DOCTYPE html>
-<html>
-<head><style>
-  body { font-family: Inter, sans-serif; color: #0A1628; background: #EEF3FD; margin: 0; padding: 20px; }
-  .card { background: #fff; border-radius: 12px; padding: 32px; max-width: 600px; margin: 0 auto; }
-  .header { background: linear-gradient(135deg, #1B4FD8, #3B82F6); color: #fff; padding: 24px; border-radius: 10px; margin-bottom: 24px; }
-  .amount { font-size: 32px; font-weight: 800; color: #1B4FD8; }
-  .row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #EEF3FD; }
-  .btn { display: inline-block; padding: 12px 24px; background: #1B4FD8; color: #fff; border-radius: 8px; text-decoration: none; font-weight: 700; }
-  .footer { text-align: center; color: #94A3B8; font-size: 12px; margin-top: 24px; }
-</style></head>
-<body>
-<div class="card">
-  <div class="header">
-    <h1 style="margin:0;font-size:20px">Deemona AI Finance OS</h1>
-    <p style="margin:4px 0 0;opacity:0.8">Invoice Notification</p>
-  </div>
-  <div class="amount">Rs ${parseFloat(invoice.total_amount||0).toLocaleString('en-IN')}</div>
-  <div style="margin:8px 0 20px;color:#64748B">Invoice #${invoice.invoice_number}</div>
-  <div class="row"><span>Invoice Date</span><span>${new Date(invoice.date).toLocaleDateString('en-IN')}</span></div>
-  <div class="row"><span>Due Date</span><span>${invoice.due_date ? new Date(invoice.due_date).toLocaleDateString('en-IN') : 'On Receipt'}</span></div>
-  <div class="row"><span>Status</span><span style="color:${invoice.status==='paid'?'#059669':'#D97706'}">${invoice.status?.toUpperCase()}</span></div>
-  <div style="text-align:center;margin:24px 0">
-    <a class="btn" href="${process.env.FRONTEND_URL||'https://deemona-finance-os-frontend.onrender.com'}/accounting">View Invoice</a>
-  </div>
-  <div class="footer">Deemona Technologies | AI Finance OS<br>This is an automated email. Please do not reply.</div>
-</div>
-</body></html>`;
-}
-
-export function payslipEmailTemplate(payslip: any, employee: any): string {
-  return `
-<!DOCTYPE html>
-<html><head><style>
-  body { font-family: Inter, sans-serif; color: #0A1628; background: #EEF3FD; margin: 0; padding: 20px; }
-  .card { background: #fff; border-radius: 12px; padding: 32px; max-width: 600px; margin: 0 auto; }
-  .header { background: linear-gradient(135deg, #7C3AED, #6D28D9); color: #fff; padding: 24px; border-radius: 10px; margin-bottom: 24px; }
-  .row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #EEF3FD; font-size: 14px; }
-  .total { font-size: 20px; font-weight: 800; color: #059669; }
-</style></head>
-<body>
-<div class="card">
-  <div class="header">
-    <h2 style="margin:0">Payslip — ${['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][(payslip.month||1)-1]} ${payslip.year}</h2>
-    <p style="margin:4px 0 0;opacity:0.8">${employee.first_name} ${employee.last_name} | ${employee.employee_code}</p>
-  </div>
-  <div class="row"><span>Basic Salary</span><span>Rs ${parseFloat(payslip.basic||0).toLocaleString('en-IN')}</span></div>
-  <div class="row"><span>HRA</span><span>Rs ${parseFloat(payslip.hra||0).toLocaleString('en-IN')}</span></div>
-  <div class="row"><span>Special Allowance</span><span>Rs ${parseFloat(payslip.special_allowance||0).toLocaleString('en-IN')}</span></div>
-  <div class="row" style="color:#059669"><span><strong>Gross Salary</strong></span><span><strong>Rs ${parseFloat(payslip.gross||0).toLocaleString('en-IN')}</strong></span></div>
-  <div class="row" style="color:#DC2626"><span>PF Deduction</span><span>- Rs ${parseFloat(payslip.pf_employee||0).toLocaleString('en-IN')}</span></div>
-  <div class="row" style="color:#DC2626"><span>TDS</span><span>- Rs ${parseFloat(payslip.tds||0).toLocaleString('en-IN')}</span></div>
-  <div class="row"><span class="total">Net Pay</span><span class="total">Rs ${parseFloat(payslip.net||0).toLocaleString('en-IN')}</span></div>
-  <p style="font-size:12px;color:#94A3B8;margin-top:20px;text-align:center">Deemona AI Finance OS | Confidential Payslip</p>
-</div></body></html>`;
-}
-
-export async function sendPasswordResetEmail(to: string, name: string, otp: string, expiryMinutes: number): Promise<{ success: boolean }> {
+// ── Password Reset Email ──────────────────────────────────────
+export async function sendPasswordResetEmail(
+  to: string,
+  name: string,
+  otp: string,
+  expiryMinutes: number
+): Promise<{ success: boolean }> {
   return sendEmail({
     to,
     subject: 'Your Deemona Password Reset OTP',
-    text: `Hi , your OTP to reset your password is: . This OTP expires in  minutes.`,
-    html: `<div style='font-family:Inter,sans-serif;padding:24px'><h2 style='color:#1B4FD8'>Password Reset OTP</h2><p>Hi ,</p><p>Your OTP is: <strong style='font-size:24px;color:#1B4FD8'></strong></p><p>Expires in  minutes.</p><p style='color:#94A3B8;font-size:12px'>Deemona AI Finance OS</p></div>`
+    html: `
+      <div style="font-family:Inter,sans-serif;max-width:500px;margin:0 auto;padding:24px">
+        <div style="background:linear-gradient(135deg,#1B4FD8,#3B82F6);padding:24px;border-radius:12px;color:#fff;margin-bottom:24px">
+          <h2 style="margin:0;font-size:20px">Deemona AI Finance OS</h2>
+          <p style="margin:4px 0 0;opacity:0.8">Password Reset Request</p>
+        </div>
+        <p>Hi <strong>${name}</strong>,</p>
+        <p>Your OTP to reset your password is:</p>
+        <div style="font-size:32px;font-weight:800;color:#1B4FD8;letter-spacing:8px;padding:16px;background:#EEF3FD;border-radius:10px;text-align:center;margin:16px 0">${otp}</div>
+        <p style="color:#64748B;font-size:13px">This OTP expires in <strong>${expiryMinutes} minutes</strong>. Do not share it with anyone.</p>
+        <p style="color:#94A3B8;font-size:12px">If you did not request this, please ignore this email.</p>
+        <hr style="border:none;border-top:1px solid #E2E8F0;margin:20px 0"/>
+        <p style="color:#94A3B8;font-size:11px;text-align:center">Deemona Technologies | AI Finance OS</p>
+      </div>
+    `,
+    text: `Hi ${name}, your OTP is: ${otp}. Expires in ${expiryMinutes} minutes.`,
   });
 }
 
+// ── Invoice Email ─────────────────────────────────────────────
+export async function sendInvoiceEmail(to: string, invoice: any): Promise<{ success: boolean }> {
+  const amount = parseFloat(invoice.total_amount || 0).toLocaleString('en-IN');
+  return sendEmail({
+    to,
+    subject: `Invoice ${invoice.invoice_number} - Rs ${amount}`,
+    html: `
+      <div style="font-family:Inter,sans-serif;max-width:600px;margin:0 auto;padding:24px">
+        <div style="background:linear-gradient(135deg,#1B4FD8,#3B82F6);padding:24px;border-radius:12px;color:#fff;margin-bottom:24px">
+          <h2 style="margin:0">Invoice Notification</h2>
+          <p style="margin:4px 0 0;opacity:0.8">Deemona AI Finance OS</p>
+        </div>
+        <div style="font-size:28px;font-weight:800;color:#1B4FD8;margin-bottom:4px">Rs ${amount}</div>
+        <div style="color:#64748B;margin-bottom:20px">Invoice #${invoice.invoice_number}</div>
+        <table style="width:100%;border-collapse:collapse;font-size:14px">
+          <tr style="border-bottom:1px solid #E2E8F0"><td style="padding:8px 0;color:#64748B">Date</td><td style="padding:8px 0;text-align:right">${new Date(invoice.date).toLocaleDateString('en-IN')}</td></tr>
+          <tr style="border-bottom:1px solid #E2E8F0"><td style="padding:8px 0;color:#64748B">Status</td><td style="padding:8px 0;text-align:right;font-weight:600;color:${invoice.status==='paid'?'#059669':'#D97706'}">${invoice.status?.toUpperCase()}</td></tr>
+        </table>
+        <div style="margin-top:24px;text-align:center">
+          <a href="https://deemona-finance-os-frontend.onrender.com/accounting" style="background:#1B4FD8;color:#fff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:700">View Invoice</a>
+        </div>
+        <p style="color:#94A3B8;font-size:11px;text-align:center;margin-top:24px">Deemona Technologies | AI Finance OS</p>
+      </div>
+    `,
+  });
+}
+
+// ── Payslip Email ─────────────────────────────────────────────
+export async function sendPayslipEmail(to: string, payslip: any, employee: any): Promise<{ success: boolean }> {
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const month = months[(payslip.month || 1) - 1];
+  return sendEmail({
+    to,
+    subject: `Payslip - ${month} ${payslip.year} | ${employee.first_name} ${employee.last_name}`,
+    html: `
+      <div style="font-family:Inter,sans-serif;max-width:600px;margin:0 auto;padding:24px">
+        <div style="background:linear-gradient(135deg,#7C3AED,#6D28D9);padding:24px;border-radius:12px;color:#fff;margin-bottom:24px">
+          <h2 style="margin:0">Payslip - ${month} ${payslip.year}</h2>
+          <p style="margin:4px 0 0;opacity:0.8">${employee.first_name} ${employee.last_name} | ${employee.employee_code}</p>
+        </div>
+        <table style="width:100%;border-collapse:collapse;font-size:14px">
+          <tr style="border-bottom:1px solid #E2E8F0"><td style="padding:8px 0;color:#64748B">Basic</td><td style="padding:8px 0;text-align:right">Rs ${parseFloat(payslip.basic||0).toLocaleString('en-IN')}</td></tr>
+          <tr style="border-bottom:1px solid #E2E8F0"><td style="padding:8px 0;color:#64748B">HRA</td><td style="padding:8px 0;text-align:right">Rs ${parseFloat(payslip.hra||0).toLocaleString('en-IN')}</td></tr>
+          <tr style="border-bottom:1px solid #E2E8F0;color:#059669"><td style="padding:8px 0"><strong>Gross</strong></td><td style="padding:8px 0;text-align:right"><strong>Rs ${parseFloat(payslip.gross||0).toLocaleString('en-IN')}</strong></td></tr>
+          <tr style="border-bottom:1px solid #E2E8F0;color:#DC2626"><td style="padding:8px 0">PF</td><td style="padding:8px 0;text-align:right">- Rs ${parseFloat(payslip.pf_employee||0).toLocaleString('en-IN')}</td></tr>
+          <tr style="border-bottom:1px solid #E2E8F0;color:#DC2626"><td style="padding:8px 0">TDS</td><td style="padding:8px 0;text-align:right">- Rs ${parseFloat(payslip.tds||0).toLocaleString('en-IN')}</td></tr>
+          <tr><td style="padding:12px 0;font-size:18px;font-weight:800;color:#059669">Net Pay</td><td style="padding:12px 0;text-align:right;font-size:18px;font-weight:800;color:#059669">Rs ${parseFloat(payslip.net||0).toLocaleString('en-IN')}</td></tr>
+        </table>
+        <p style="color:#94A3B8;font-size:11px;text-align:center;margin-top:24px">Confidential | Deemona AI Finance OS</p>
+      </div>
+    `,
+  });
+}
