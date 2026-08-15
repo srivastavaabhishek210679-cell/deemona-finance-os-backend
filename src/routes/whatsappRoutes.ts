@@ -1,4 +1,4 @@
-import { Router, Request, Response } from 'express';
+﻿import { Router, Request, Response } from 'express';
 import { Pool } from 'pg';
 import { requireAuth } from '../middleware/auth';
 
@@ -7,6 +7,7 @@ const TWILIO_TOKEN = process.env.TWILIO_AUTH_TOKEN;
 const TWILIO_FROM  = process.env.TWILIO_WHATSAPP_FROM || 'whatsapp:+14155238886';
 
 async function sendWA(to: string, message: string) {
+  console.log('[WhatsApp] Sending to:', to, '| From:', TWILIO_FROM, '| SID configured:', !!TWILIO_SID);
   if (!TWILIO_SID || !TWILIO_TOKEN) {
     return { success: false, error: 'TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN not set in environment variables' };
   }
@@ -45,6 +46,7 @@ export function createWhatsAppRouter(pool: Pool): Router {
   router.post('/send', requireAuth, async (req: Request, res: Response) => {
     try {
       const { to, template, data, message } = req.body;
+      console.log('[WhatsApp] /send called. to:', to, 'template:', template, 'message:', message);
       if (!to) return res.status(400).json({ error: 'Phone number required' }) as any;
       const fn = TEMPLATES[template] || TEMPLATES.custom;
       const body = message || fn({ ...data, message });
