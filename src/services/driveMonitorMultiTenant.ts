@@ -1,4 +1,4 @@
-// ============================================================
+﻿// ============================================================
 // Deemona AI Finance OS — Multi-Tenant Drive Monitor
 // File: src/services/driveMonitorMultiTenant.ts
 // Each tenant has their own folder, recipients, API key
@@ -82,8 +82,7 @@ async function analyzeFile(filename: string, buffer: Buffer, fileType: FileType,
     const textMatches = pdfText.match(/BT[sS]*?ET/g) || [];
     const extracted = textMatches
       .join(' ')
-      .replace(/[^ -~
-]/g, ' ')
+      .replace(/[^\x20-\x7E]/g, ' ')
       .replace(/\s+/g, ' ')
       .trim()
       .substring(0, 4000);
@@ -91,15 +90,22 @@ async function analyzeFile(filename: string, buffer: Buffer, fileType: FileType,
       ? extracted 
       : `[PDF file: ${filename}, ${buffer.length} bytes. Binary content - analyzing metadata and filename only.]`;
   } else if (ext === 'pdf') {
-    // Extract readable text from PDF
-    const pdfStr = buffer.toString('latin1');
-    const matches = pdfStr.match(/\(([^)]{3,200})\)/g) || [];
-    const extracted = matches
-      .map(m => m.slice(1, -1))
-      .filter(t => /[a-zA-Z]{3,}/.test(t))
-      .join(' ')
-      .substring(0, 4000);
-    preview = extracted.length > 50 ? extracted : `[PDF: ${filename}, ${buffer.length} bytes]`;
+    // Simple PDF text extraction - look for readable strings
+    const pdfStr = buffer.toString('binary');
+    const words = [];
+    let word = '';
+    for (let i = 0; i < Math.min(pdfStr.length, 50000); i++) {
+      const code = pdfStr.charCodeAt(i);
+      if (code >= 32 && code <= 126) {
+        word += pdfStr[i];
+      } else if (word.length >= 4) {
+        words.push(word);
+        word = '';
+      } else {
+        word = '';
+      }
+    }
+    preview = words.join(' ').substring(0, 4000) || `[PDF: ${filename}, ${buffer.length} bytes]`;
   } else {
     preview = `[${ext.toUpperCase()} file: ${filename}, ${buffer.length} bytes]`;
   }
