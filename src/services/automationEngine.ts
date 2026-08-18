@@ -232,7 +232,7 @@ export async function checkVendorPaymentSchedule(pool, tenantId) {
 // ============================================================
 
 // ── BATCH 1: Daily Morning Brief (8AM IST = 2:30 UTC) ────────
-async function sendDailyMorningBrief(pool, tenantId) {
+export async function sendDailyMorningBrief(pool, tenantId) {
   try {
     const adminEmail = await getTenantAdminEmail(pool, tenantId);
 
@@ -288,7 +288,7 @@ async function sendDailyMorningBrief(pool, tenantId) {
 }
 
 // ── BATCH 1: Weekly Finance Digest (Monday 9AM IST) ──────────
-async function sendWeeklyDigest(pool, tenantId) {
+export async function sendWeeklyDigest(pool, tenantId) {
   try {
     const adminEmail = await getTenantAdminEmail(pool, tenantId);
 
@@ -323,7 +323,7 @@ async function sendWeeklyDigest(pool, tenantId) {
 }
 
 // ── BATCH 1: Invoice Payment Reminders ───────────────────────
-async function sendInvoicePaymentReminders(pool, tenantId) {
+export async function sendInvoicePaymentReminders(pool, tenantId) {
   try {
     const adminEmail = await getTenantAdminEmail(pool, tenantId);
 
@@ -379,7 +379,7 @@ async function sendInvoicePaymentReminders(pool, tenantId) {
 }
 
 // ── BATCH 1: Payslip Auto-Distribution ───────────────────────
-async function distributePayslips(pool, tenantId) {
+export async function distributePayslips(pool, tenantId) {
   try {
     // Get latest payroll run
     const payrollRun = await pool.query(
@@ -429,7 +429,7 @@ async function distributePayslips(pool, tenantId) {
 }
 
 // ── BATCH 1: Fraud Detection ──────────────────────────────────
-async function runFraudDetection(pool, tenantId) {
+export async function runFraudDetection(pool, tenantId) {
   try {
     const adminEmail = await getTenantAdminEmail(pool, tenantId);
     const alerts = [];
@@ -476,7 +476,7 @@ async function runFraudDetection(pool, tenantId) {
 }
 
 // ── BATCH 1: Vendor GSTIN Compliance Check ───────────────────
-async function checkVendorGSTINCompliance(pool, tenantId) {
+export async function checkVendorGSTINCompliance(pool, tenantId) {
   try {
     const adminEmail = await getTenantAdminEmail(pool, tenantId);
 
@@ -515,7 +515,7 @@ async function checkVendorGSTINCompliance(pool, tenantId) {
 }
 
 // ── BATCH 1: Cash Flow Prediction ────────────────────────────
-async function predictCashFlow(pool, tenantId) {
+export async function predictCashFlow(pool, tenantId) {
   try {
     const adminEmail = await getTenantAdminEmail(pool, tenantId);
 
@@ -575,7 +575,7 @@ async function predictCashFlow(pool, tenantId) {
 // ============================================================
 
 // ── TDS Auto-Tracking ─────────────────────────────────────────
-async function trackTDS(pool, tenantId) {
+export async function trackTDS(pool, tenantId) {
   try {
     const adminEmail = await getTenantAdminEmail(pool, tenantId);
 
@@ -614,7 +614,7 @@ async function trackTDS(pool, tenantId) {
 }
 
 // ── Budget Burnout Predictor ───────────────────────────────────
-async function predictBudgetBurnout(pool, tenantId) {
+export async function predictBudgetBurnout(pool, tenantId) {
   try {
     const adminEmail = await getTenantAdminEmail(pool, tenantId);
 
@@ -665,7 +665,7 @@ async function predictBudgetBurnout(pool, tenantId) {
 }
 
 // ── Expense Policy Enforcement ────────────────────────────────
-async function enforceExpensePolicy(pool, tenantId) {
+export async function enforceExpensePolicy(pool, tenantId) {
   try {
     // Get policy limits from tenant settings
     const policyResult = await pool.query(
@@ -721,7 +721,7 @@ async function enforceExpensePolicy(pool, tenantId) {
 }
 
 // ── Contract/Probation Auto-Monitor ──────────────────────────
-async function monitorContracts(pool, tenantId) {
+export async function monitorContracts(pool, tenantId) {
   try {
     const adminEmail = await getTenantAdminEmail(pool, tenantId);
 
@@ -770,7 +770,7 @@ async function monitorContracts(pool, tenantId) {
 }
 
 // ── Credit Limit Auto-Monitor ─────────────────────────────────
-async function checkCreditLimits(pool, tenantId) {
+export async function checkCreditLimits(pool, tenantId) {
   try {
     const adminEmail = await getTenantAdminEmail(pool, tenantId);
 
@@ -801,7 +801,7 @@ async function checkCreditLimits(pool, tenantId) {
 }
 
 // ── Statutory Due Date Monitor ────────────────────────────────
-async function checkStatutoryDueDates(pool, tenantId) {
+export async function checkStatutoryDueDates(pool, tenantId) {
   try {
     const adminEmail = await getTenantAdminEmail(pool, tenantId);
     const now = new Date();
@@ -842,7 +842,7 @@ async function checkStatutoryDueDates(pool, tenantId) {
 }
 
 // ── Invoice Auto-Aging Report (Daily 6AM) ─────────────────────
-async function sendInvoiceAgingReport(pool, tenantId) {
+export async function sendInvoiceAgingReport(pool, tenantId) {
   try {
     const adminEmail = await getTenantAdminEmail(pool, tenantId);
 
@@ -882,7 +882,7 @@ async function sendInvoiceAgingReport(pool, tenantId) {
 
 
 // ── 1. Recurring Invoice Auto-Generation ─────────────────────
-async function generateRecurringInvoices(pool, tenantId) {
+export async function generateRecurringInvoices(pool, tenantId) {
   try {
     // Check for recurring invoice schedules
     const schedules = await pool.query(
@@ -930,7 +930,7 @@ async function generateRecurringInvoices(pool, tenantId) {
 }
 
 // ── 2. Revenue Forecasting AI ────────────────────────────────
-async function generateRevenueForecast(pool, tenantId) {
+export async function generateRevenueForecast(pool, tenantId) {
   try {
     const adminEmail = await getTenantAdminEmail(pool, tenantId);
 
@@ -981,7 +981,7 @@ async function generateRevenueForecast(pool, tenantId) {
 }
 
 // ── 3. Smart Budget Reallocation ──────────────────────────────
-async function analyzeBudgetReallocation(pool, tenantId) {
+export async function analyzeBudgetReallocation(pool, tenantId) {
   try {
     const adminEmail = await getTenantAdminEmail(pool, tenantId);
 
@@ -1038,7 +1038,7 @@ async function analyzeBudgetReallocation(pool, tenantId) {
 }
 
 // ── 4. Customer Payment Pattern Analysis ──────────────────────
-async function analyzeCustomerPaymentPatterns(pool, tenantId) {
+export async function analyzeCustomerPaymentPatterns(pool, tenantId) {
   try {
     const adminEmail = await getTenantAdminEmail(pool, tenantId);
 
@@ -1073,7 +1073,7 @@ async function analyzeCustomerPaymentPatterns(pool, tenantId) {
 }
 
 // ── 5. Contract Auto-Renewal Alert ───────────────────────────
-async function checkContractRenewals(pool, tenantId) {
+export async function checkContractRenewals(pool, tenantId) {
   try {
     const adminEmail = await getTenantAdminEmail(pool, tenantId);
 
@@ -1109,7 +1109,7 @@ async function checkContractRenewals(pool, tenantId) {
 }
 
 // ── 6. Insurance Premium Auto-Track ──────────────────────────
-async function trackInsurancePremiums(pool, tenantId) {
+export async function trackInsurancePremiums(pool, tenantId) {
   try {
     const adminEmail = await getTenantAdminEmail(pool, tenantId);
 
@@ -1143,7 +1143,7 @@ async function trackInsurancePremiums(pool, tenantId) {
 }
 
 // ── 7. PF/ESI ECR File Generation ────────────────────────────
-async function generatePFECRFile(pool, tenantId) {
+export async function generatePFECRFile(pool, tenantId) {
   try {
     const adminEmail = await getTenantAdminEmail(pool, tenantId);
 
@@ -1206,7 +1206,7 @@ async function generatePFECRFile(pool, tenantId) {
 }
 
 // ── 8. Increment/Appraisal Auto-Trigger ──────────────────────
-async function checkAppraisalTriggers(pool, tenantId) {
+export async function checkAppraisalTriggers(pool, tenantId) {
   try {
     const adminEmail = await getTenantAdminEmail(pool, tenantId);
 
