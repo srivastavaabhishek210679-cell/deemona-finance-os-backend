@@ -32,9 +32,12 @@ interface TenantSettings {
 function detectFileType(filename: string): FileType {
   const lower = filename.toLowerCase();
   if (!FINANCIAL_EXTS.some(ext => lower.endsWith(ext))) return null;
-  if (MONTH_PATTERNS.some(p => lower.includes(p)) || MONTH_NAMES.some(m => lower.includes(m))) return 'monthly';
+  // Check weekly FIRST to avoid false positives from month names
   if (WEEK_PATTERNS.some(p => lower.includes(p))) return 'weekly';
+  // Check daily before monthly
   if (DAILY_PATTERNS.some(p => lower.includes(p)) || DAY_NAMES.some(d => lower.includes(d))) return 'daily';
+  // Monthly last
+  if (MONTH_PATTERNS.some(p => lower.includes(p)) || MONTH_NAMES.some(m => lower.includes(m))) return 'monthly';
   return null;
 }
 
@@ -73,6 +76,30 @@ async function analyzeFile(filename: string, buffer: Buffer, fileType: FileType,
   let preview = '';
   if (['csv','txt'].includes(ext)) {
     preview = buffer.toString('utf8').substring(0, 6000);
+  } else if (ext === 'pdf') {
+    // For PDF: extract readable text by looking for plain text between PDF markers
+    const pdfText = buffer.toString('latin1');
+    const textMatches = pdfText.match(/BT[sS]*?ET/g) || [];
+    const extracted = textMatches
+      .join(' ')
+      .replace(/[^ -~
+]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .substring(0, 4000);
+    preview = extracted.length > 100 
+      ? extracted 
+      : `[PDF file: ${filename}, ${buffer.length} bytes. Binary content - analyzing metadata and filename only.]`;
+  } else if (ext === 'pdf') {
+    // Extract readable text from PDF
+    const pdfStr = buffer.toString('latin1');
+    const matches = pdfStr.match(/\(([^)]{3,200})\)/g) || [];
+    const extracted = matches
+      .map(m => m.slice(1, -1))
+      .filter(t => /[a-zA-Z]{3,}/.test(t))
+      .join(' ')
+      .substring(0, 4000);
+    preview = extracted.length > 50 ? extracted : `[PDF: ${filename}, ${buffer.length} bytes]`;
   } else {
     preview = `[${ext.toUpperCase()} file: ${filename}, ${buffer.length} bytes]`;
   }
