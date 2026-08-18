@@ -1,4 +1,4 @@
-import { Router, Request, Response } from 'express';
+﻿import { Router, Request, Response } from 'express';
 import { Pool } from 'pg';
 import { requireAuth } from '../middleware/auth';
 import {
@@ -104,7 +104,7 @@ export function createAutomationTestRouter(pool: Pool): Router {
       const tenantId = tid(req);
       const adminEmail = process.env.ADMIN_EMAIL || 'admin@deemona.com';
       const result = await pool.query(
-        'INSERT INTO crm_leads (tenant_id, name, email, company, status) VALUES ($1,$2,$3,$4,$5) RETURNING id, name',
+        'INSERT INTO crm_leads (tenant_id, name, email, company, stage) VALUES ($1,$2,$3,$4,$5) RETURNING id, name',
         [tenantId, 'Test Lead', adminEmail, 'Test Company Pvt Ltd', 'new']
       );
       const lead = result.rows[0];
