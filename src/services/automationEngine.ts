@@ -124,7 +124,7 @@ export async function handleInvoiceAutoApproval(pool: Pool, tenantId: string, in
     );
     if (!inv.rows.length) return;
     const invoice = inv.rows[0];
-    const amount = parseFloat(invoice.total_amount || 0);
+    const amount = parseFloat(COALESCE(invoice.total_amount, invoice.balance_due, 0) || 0);
     const AUTO_APPROVE_THRESHOLD = 50000;
 
     if (amount <= AUTO_APPROVE_THRESHOLD && invoice.status === 'pending') {
@@ -178,7 +178,7 @@ export async function handleWhatsAppApprovalReply(pool: Pool, from: string, body
     const invoice = result.rows[0];
     const newStatus = isApprove ? 'approved' : 'rejected';
     await pool.query(`UPDATE ap_invoices SET status=$1, updated_at=NOW() WHERE id=$2`, [newStatus, invoice.invoice_id]);
-    const amount = parseFloat(invoice.total_amount || 0);
+    const amount = parseFloat(COALESCE(invoice.total_amount, invoice.balance_due, 0) || 0);
     return `Invoice ${invoice.invoice_number} has been *${newStatus.toUpperCase()}*. Amount: Rs ${amount.toLocaleString('en-IN')}`;
   } catch {
     return 'Error processing approval. Please try again.';
@@ -193,7 +193,7 @@ export async function handleExpenseAutoApproval(pool: Pool, tenantId: string, ex
     const result = await pool.query(`SELECT * FROM expense_claims WHERE id=$1`, [expenseId]);
     if (!result.rows.length) return;
     const expense = result.rows[0];
-    const amount = parseFloat(expense.amount || 0);
+    const amount = parseFloat(expense.total_amount || 0);
     const AUTO_APPROVE_LIMIT = 15000;
     if (amount <= AUTO_APPROVE_LIMIT && expense.status === 'Pending') {
       await pool.query(`UPDATE expenses SET status='approved', updated_at=NOW() WHERE id=$1`, [expenseId]);
@@ -282,24 +282,24 @@ export async function checkComplianceAlerts(pool: Pool, tenantId: string): Promi
 // ============================================================
 export async function handleNewLeadNurture(pool: Pool, tenantId: string, dealId: string): Promise<void> {
   try {
-    const result = await pool.query(`SELECT * FROM customers WHERE id=$1`, [dealId]);
+    const result = await pool.query(`SELECT * FROM crm_leads WHERE id=$1`, [dealId]);
     if (!result.rows.length) return;
     const deal = result.rows[0];
     const adminEmail = await getTenantAdminEmail(pool, tenantId);
     const aiResponse = await anthropic.messages.create({
       model: 'claude-sonnet-4-6', max_tokens: 400,
-      messages: [{ role: 'user', content: `Write a 2-paragraph professional welcome email for a new sales lead named ${deal.name} with deal value Rs ${0}. Be warm and professional.` }]
+      messages: [{ role: 'user', content: `Write a 2-paragraph professional welcome email for a new sales lead named ${deal.contact_name || ' - ' || deal.company_name} with deal value Rs ${0}. Be warm and professional.` }]
     });
     const emailBody = (aiResponse.content[0] as any).text || 'Thank you for your interest.';
     await sendEmail(adminEmail,
-      `New Lead Alert: ${deal.name} — Rs ${parseFloat(0||0).toLocaleString('en-IN')}`,
+      `New Lead Alert: ${deal.contact_name || ' - ' || deal.company_name} — Rs ${parseFloat(0||0).toLocaleString('en-IN')}`,
       `<div style="font-family:Arial;padding:20px">
-      <h2 style="color:#1B4FD8">New Lead: ${deal.name}</h2>
-      <p>Customer: ${deal.name} | Value: Rs ${parseFloat(0||0).toLocaleString('en-IN')}</p>
+      <h2 style="color:#1B4FD8">New Lead: ${deal.contact_name || ' - ' || deal.company_name}</h2>
+      <p>Customer: ${deal.contact_name || ' - ' || deal.company_name} | Value: Rs ${parseFloat(0||0).toLocaleString('en-IN')}</p>
       ${emailBody.split('\n').map((p: string) => p ? `<p>${p}</p>` : '').join('')}
       <p style="color:#64748B;font-size:12px">Deemona AI Finance OS | Lead Nurture</p></div>`
     );
-    await logAutomation(pool, tenantId, 'LEAD_NURTURE_EMAIL', 'sent', `Lead nurture email for ${deal.name}`);
+    await logAutomation(pool, tenantId, 'LEAD_NURTURE_EMAIL', 'sent', `Lead nurture email for ${deal.contact_name || ' - ' || deal.company_name}`);
   } catch (e) { console.error('[Automation] Lead nurture error:', e); }
 }
 
