@@ -57,20 +57,20 @@ async function getTenantAdminEmail(pool, tenantId) {
   try {
     const monitor = await pool.query('SELECT recipients FROM monitor_settings WHERE tenant_id=$1 LIMIT 1', [tenantId]);
     if (monitor.rows[0] && monitor.rows[0].recipients && monitor.rows[0].recipients.length > 0) return monitor.rows[0].recipients[0];
-    const admin = await pool.query("SELECT email FROM users WHERE role IN ('admin','owner') ORDER BY created_at ASC LIMIT 1");
+    const admin = await pool.query("SELECT email FROM users WHERE tenant_id=$1 AND role IN ('admin','owner') ORDER BY created_at ASC LIMIT 1", [tenantId]);
     if (admin.rows[0] && admin.rows[0].email) return admin.rows[0].email;
   } catch {}
-  return process.env.ADMIN_EMAIL || 'admin@deemona.com';
+  return null;
 }
 
 async function getTenantNotificationEmails(pool, tenantId) {
   try {
     const monitor = await pool.query('SELECT recipients FROM monitor_settings WHERE tenant_id=$1 LIMIT 1', [tenantId]);
     if (monitor.rows[0] && monitor.rows[0].recipients && monitor.rows[0].recipients.length > 0) return monitor.rows[0].recipients;
-    const admin = await pool.query("SELECT email FROM users WHERE role IN ('admin','owner') ORDER BY created_at ASC LIMIT 3");
+    const admin = await pool.query("SELECT email FROM users WHERE tenant_id=$1 AND role IN ('admin','owner') ORDER BY created_at ASC LIMIT 3", [tenantId]);
     if (admin.rows.length > 0) return admin.rows.map(r => r.email);
   } catch {}
-  return [process.env.ADMIN_EMAIL || 'admin@deemona.com'];
+  return [];
 }
 
 async function getManagerPhone(pool, tenantId) {
