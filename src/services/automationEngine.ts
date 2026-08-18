@@ -1,5 +1,4 @@
-﻿// v4 - correct table names
-// ============================================================
+﻿// ============================================================
 // Deemona AI Finance OS â€” Automation Engine V2
 // File: src/services/automationEngine.ts
 // Correct table names matching actual Neon DB schema
@@ -114,22 +113,22 @@ async function getMonthlyBurn(pool: Pool, tenantId: string): Promise<number> {
 }
 
 // ============================================================
-// 1. INVOICE AUTO-APPROVAL (uses ap_invoices table)
+// 1. INVOICE AUTO-APPROVAL (uses generated_invoices table)
 // ============================================================
 export async function handleInvoiceAutoApproval(pool: Pool, tenantId: string, invoiceId: string): Promise<void> {
   try {
     const inv = await pool.query(
-      `SELECT * FROM ap_invoices WHERE id=$1`,
+      `SELECT * FROM generated_invoices WHERE invoice_id=$1`,
       [invoiceId]
     );
     if (!inv.rows.length) return;
     const invoice = inv.rows[0];
-    const amount = parseFloat(invoice.total_amount || invoice.balance_due || 0);
+    const amount = parseFloat(invoice.total_amount || 0);
     const AUTO_APPROVE_THRESHOLD = 50000;
 
     if (amount <= AUTO_APPROVE_THRESHOLD && invoice.status === 'pending') {
       await pool.query(
-        `UPDATE ap_invoices SET status='approved' WHERE id=$1`,
+        `UPDATE generated_invoices SET status='approved' WHERE invoice_id=$1`,
         [invoiceId]
       );
       const adminEmail = await getTenantAdminEmail(pool, tenantId);
@@ -171,14 +170,14 @@ export async function handleWhatsAppApprovalReply(pool: Pool, from: string, body
   const partialId = (approveMatch || rejectMatch)![1].toLowerCase();
   try {
     const result = await pool.query(
-      `SELECT * FROM ap_invoices WHERE id::text LIKE $1 AND status='pending' LIMIT 1`,
+      `SELECT * FROM generated_invoices WHERE invoice_id::text LIKE $1 AND status='pending' LIMIT 1`,
       [`${partialId}%`]
     );
     if (!result.rows.length) return `Invoice not found or already processed.`;
     const invoice = result.rows[0];
     const newStatus = isApprove ? 'approved' : 'rejected';
-    await pool.query(`UPDATE ap_invoices SET status=$1, updated_at=NOW() WHERE id=$2`, [newStatus, invoice.invoice_id]);
-    const amount = parseFloat(invoice.total_amount || invoice.balance_due || 0);
+    await pool.query(`UPDATE generated_invoices SET status=$1 WHERE invoice_id=$2`, [newStatus, invoice.invoice_id]);
+    const amount = parseFloat(invoice.total_amount || 0);
     return `Invoice ${invoice.invoice_number} has been *${newStatus.toUpperCase()}*. Amount: Rs ${amount.toLocaleString('en-IN')}`;
   } catch {
     return 'Error processing approval. Please try again.';
@@ -190,13 +189,13 @@ export async function handleWhatsAppApprovalReply(pool: Pool, from: string, body
 // ============================================================
 export async function handleExpenseAutoApproval(pool: Pool, tenantId: string, expenseId: string): Promise<void> {
   try {
-    const result = await pool.query(`SELECT * FROM expense_claims WHERE id=$1`, [expenseId]);
+    const result = await pool.query(`SELECT * FROM expenses WHERE expense_id=$1`, [expenseId]);
     if (!result.rows.length) return;
     const expense = result.rows[0];
-    const amount = parseFloat(expense.total_amount || 0);
+    const amount = parseFloat(expense.amount || 0);
     const AUTO_APPROVE_LIMIT = 15000;
     if (amount <= AUTO_APPROVE_LIMIT && expense.status === 'Pending') {
-      await pool.query(`UPDATE expenses SET status='approved', updated_at=NOW() WHERE id=$1`, [expenseId]);
+      await pool.query(`UPDATE expenses SET status='Approved' WHERE expense_id=$1`, [expenseId]);
       const adminEmail = await getTenantAdminEmail(pool, tenantId);
       await sendEmail(adminEmail,
         `Expense Auto-Approved: ${expense.title}`,
@@ -282,24 +281,24 @@ export async function checkComplianceAlerts(pool: Pool, tenantId: string): Promi
 // ============================================================
 export async function handleNewLeadNurture(pool: Pool, tenantId: string, dealId: string): Promise<void> {
   try {
-    const result = await pool.query(`SELECT * FROM crm_leads WHERE id=$1`, [dealId]);
+    const result = await pool.query(`SELECT * FROM deals WHERE deal_id=$1`, [dealId]);
     if (!result.rows.length) return;
     const deal = result.rows[0];
     const adminEmail = await getTenantAdminEmail(pool, tenantId);
     const aiResponse = await anthropic.messages.create({
       model: 'claude-sonnet-4-6', max_tokens: 400,
-      messages: [{ role: 'user', content: `Write a 2-paragraph professional welcome email for a new sales lead named ${deal.contact_name} with deal value Rs ${0}. Be warm and professional.` }]
+      messages: [{ role: 'user', content: `Write a 2-paragraph professional welcome email for a new sales lead named ${deal.customer_name} with deal value Rs ${deal.deal_value}. Be warm and professional.` }]
     });
     const emailBody = (aiResponse.content[0] as any).text || 'Thank you for your interest.';
     await sendEmail(adminEmail,
-      `New Lead Alert: ${deal.contact_name} â€” Rs ${0.toLocaleString('en-IN')}`,
+      `New Lead Alert: ${deal.deal_name} â€” Rs ${0.toLocaleString('en-IN')}`,
       `<div style="font-family:Arial;padding:20px">
-      <h2 style="color:#1B4FD8">New Lead: ${deal.contact_name}</h2>
-      <p>Customer: ${deal.contact_name} | Value: Rs ${0.toLocaleString('en-IN')}</p>
+      <h2 style="color:#1B4FD8">New Lead: ${deal.deal_name}</h2>
+      <p>Customer: ${deal.customer_name} | Value: Rs ${0.toLocaleString('en-IN')}</p>
       ${emailBody.split('\n').map((p: string) => p ? `<p>${p}</p>` : '').join('')}
       <p style="color:#64748B;font-size:12px">Deemona AI Finance OS | Lead Nurture</p></div>`
     );
-    await logAutomation(pool, tenantId, 'LEAD_NURTURE_EMAIL', 'sent', `Lead nurture email for ${deal.contact_name}`);
+    await logAutomation(pool, tenantId, 'LEAD_NURTURE_EMAIL', 'sent', `Lead nurture email for ${deal.deal_name}`);
   } catch (e) { console.error('[Automation] Lead nurture error:', e); }
 }
 
@@ -320,7 +319,7 @@ export async function runBankReconciliation(pool: Pool, tenantId: string): Promi
 export async function checkVendorPaymentSchedule(pool: Pool, tenantId: string): Promise<void> {
   try {
     const result = await pool.query(
-      `SELECT po.*, COALESCE(s.name, po.vendor_name) as vendor_name 
+      `SELECT po.*, s.name as vendor_name 
        FROM purchase_orders po 
        LEFT JOIN vendors s ON po.vendor_id=s.id
        WHERE po.status IN ('approved','Approved') 
@@ -348,34 +347,9 @@ export async function checkVendorPaymentSchedule(pool: Pool, tenantId: string): 
 // ============================================================
 // CRON JOBS
 // ============================================================
-
-// â”€â”€ Ensure automation_logs table exists with correct schema â”€â”€
-async function ensureAutomationLogs(pool: Pool): Promise<void> {
-  try {
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS automation_logs (
-        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        tenant_id UUID,
-        automation_type VARCHAR(100),
-        status VARCHAR(50),
-        detail TEXT,
-        created_at TIMESTAMPTZ DEFAULT NOW()
-      )
-    `);
-    // Add missing columns if table exists without them
-    await pool.query(`ALTER TABLE automation_logs ADD COLUMN IF NOT EXISTS automation_type VARCHAR(100)`).catch(() => {});
-    await pool.query(`ALTER TABLE automation_logs ADD COLUMN IF NOT EXISTS status VARCHAR(50)`).catch(() => {});
-    await pool.query(`ALTER TABLE automation_logs ADD COLUMN IF NOT EXISTS detail TEXT`).catch(() => {});
-    await pool.query(`ALTER TABLE automation_logs ADD COLUMN IF NOT EXISTS tenant_id UUID`).catch(() => {});
-  } catch (e) {
-    console.error('[Automation] Migration error:', e);
-  }
-}
-
 export function registerAutomationCrons(pool: Pool): void {
   const MINUTE = 60000;
   const HOUR = 3600000;
-  ensureAutomationLogs(pool).catch(() => {});
   console.log('[Automation] Registering automation cron jobs...');
 
   // Every 15 minutes
