@@ -82,7 +82,7 @@ async function getManagerPhone(pool, tenantId) {
 
 async function getMonthlyBurn(pool, tenantId) {
   try {
-    const result = await pool.query('SELECT COALESCE(SUM(total_amount),0) as burn FROM expense_claims WHERE created_at > NOW()-INTERVAL \'30 days\');
+    const result = await pool.query(`SELECT COALESCE(SUM(total_amount),0) as burn FROM expense_claims WHERE created_at > NOW()-INTERVAL '30 days'`);
     return parseFloat(result.rows[0] ? result.rows[0].burn : 0);
   } catch { return 0; }
 }
