@@ -38,6 +38,8 @@ import { createSchedulerRouter } from './routes/schedulerRoutes';
 import { createSDKRouter } from './routes/sdkRoutes';
 import { createAIStudioRouter } from './routes/aiStudioRoutes';
 import { createRBACRouter } from './middleware/rbac';
+import { createMonitorRouter } from './routes/monitorRoutes';
+import { startMonitoringLoop } from './services/driveMonitor';
 import { createNotificationRouter } from './routes/notificationRoutes';
 import { createBillingRouter } from './routes/billingRoutes';
 import { createAdminRouter } from './routes/adminRoutes';
@@ -111,6 +113,7 @@ app.use('/api/scheduler',   createSchedulerRouter(pool));
 app.use('/api/sdk',         createSDKRouter(pool));
 app.use('/api/ai-studio',   createAIStudioRouter(pool));
 app.use('/api/rbac',        createRBACRouter(pool));
+app.use('/api/monitor', createMonitorRouter());
 app.use('/api/notifications', createNotificationRouter(pool));
 app.use('/api/billing',     createBillingRouter(pool));
 app.use('/api/admin',       createAdminRouter(pool));
@@ -206,6 +209,18 @@ async function start() {
   app.listen(PORT, () => {
     console.log(`[Server] Deemona AI Finance OS running on port ${PORT}`);
     console.log(`[Server] Health: http://localhost:${PORT}/health`);
+
+  // Start autonomous Drive monitor if configured
+  if (process.env.DRIVE_FOLDER_ID) {
+    console.log('[Monitor] Starting autonomous Google Drive monitor...');
+    startMonitoringLoop().catch(err => {
+      console.error('[Monitor] Fatal error:', err);
+      // Restart after 30s — never permanently stop
+      setTimeout(() => startMonitoringLoop(), 30000);
+    });
+  } else {
+    console.log('[Monitor] DRIVE_FOLDER_ID not set — monitor not started. Add to Render env vars to activate.');
+  }
   });
 }
 
