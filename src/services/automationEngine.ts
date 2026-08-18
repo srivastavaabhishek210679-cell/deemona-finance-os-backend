@@ -1,6 +1,6 @@
-// v4 - correct table names
+﻿// v4 - correct table names
 // ============================================================
-// Deemona AI Finance OS — Automation Engine V2
+// Deemona AI Finance OS â€” Automation Engine V2
 // File: src/services/automationEngine.ts
 // Correct table names matching actual Neon DB schema
 // ============================================================
@@ -10,7 +10,7 @@ import Anthropic from '@anthropic-ai/sdk';
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-// ── Email helper ──────────────────────────────────────────────
+// â”€â”€ Email helper â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 async function sendEmail(to: string | string[], subject: string, html: string): Promise<boolean> {
   const key = process.env.RESEND_API_KEY;
   if (!key) return false;
@@ -29,7 +29,7 @@ async function sendEmail(to: string | string[], subject: string, html: string): 
   } catch { return false; }
 }
 
-// ── WhatsApp helper ───────────────────────────────────────────
+// â”€â”€ WhatsApp helper â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 async function sendWhatsApp(to: string, message: string): Promise<boolean> {
   const sid = process.env.TWILIO_ACCOUNT_SID;
   const token = process.env.TWILIO_AUTH_TOKEN;
@@ -51,7 +51,7 @@ async function sendWhatsApp(to: string, message: string): Promise<boolean> {
   } catch { return false; }
 }
 
-// ── Log automation event ──────────────────────────────────────
+// â”€â”€ Log automation event â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 async function logAutomation(pool: Pool, tenantId: string, type: string, status: string, detail: string) {
   try {
     const isUUID = /^[0-9a-f-]{36}$/i.test(tenantId);
@@ -64,7 +64,7 @@ async function logAutomation(pool: Pool, tenantId: string, type: string, status:
   console.log(`[Automation][${type}] ${status}: ${detail}`);
 }
 
-// ── Get tenant notification email ─────────────────────────────
+// â”€â”€ Get tenant notification email â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 async function getTenantAdminEmail(pool: Pool, tenantId: string): Promise<string> {
   try {
     const monitor = await pool.query(
@@ -235,7 +235,7 @@ export async function checkLowCashAlert(pool: Pool, tenantId: string): Promise<v
       const recipients = await getTenantNotificationEmails(pool, tenantId);
       const runway = burn > 0 ? (totalCash / burn).toFixed(1) : 'N/A';
       await sendEmail(recipients,
-        'Cash Position Alert — Deemona Finance',
+        'Cash Position Alert â€” Deemona Finance',
         `<div style="font-family:Arial;padding:20px;background:#FEF2F2;border-left:4px solid #DC2626">
         <h2 style="color:#DC2626">Cash Flow Alert</h2>
         <p>Monthly burn rate: <strong>Rs ${burn.toLocaleString('en-IN')}</strong></p>
@@ -267,7 +267,7 @@ export async function checkComplianceAlerts(pool: Pool, tenantId: string): Promi
         `${isUrgent ? 'URGENT: ' : ''}Compliance Due in ${daysLeft} days: ${item.title}`,
         `<div style="font-family:Arial;padding:20px;background:${isUrgent ? '#FEF2F2' : '#FFFBEB'};border-left:4px solid ${isUrgent ? '#DC2626' : '#D97706'}">
         <h2 style="color:${isUrgent ? '#DC2626' : '#D97706'}">${item.title}</h2>
-        <p>Due in <strong>${daysLeft} days</strong> — ${new Date(item.due_date).toLocaleDateString('en-IN')}</p>
+        <p>Due in <strong>${daysLeft} days</strong> â€” ${new Date(item.due_date).toLocaleDateString('en-IN')}</p>
         <p>Category: ${item.category || 'General'}</p>
         <p style="color:#64748B;font-size:12px">Deemona AI Finance OS | Compliance Monitor</p></div>`
       );
@@ -292,7 +292,7 @@ export async function handleNewLeadNurture(pool: Pool, tenantId: string, dealId:
     });
     const emailBody = (aiResponse.content[0] as any).text || 'Thank you for your interest.';
     await sendEmail(adminEmail,
-      `New Lead Alert: ${deal.contact_name || ' - ' || deal.company_name} — Rs ${parseFloat(0||0).toLocaleString('en-IN')}`,
+      `New Lead Alert: ${deal.contact_name || ' - ' || deal.company_name} â€” Rs ${parseFloat(0||0).toLocaleString('en-IN')}`,
       `<div style="font-family:Arial;padding:20px">
       <h2 style="color:#1B4FD8">New Lead: ${deal.contact_name || ' - ' || deal.company_name}</h2>
       <p>Customer: ${deal.contact_name || ' - ' || deal.company_name} | Value: Rs ${parseFloat(0||0).toLocaleString('en-IN')}</p>
@@ -322,16 +322,16 @@ export async function checkVendorPaymentSchedule(pool: Pool, tenantId: string): 
     const result = await pool.query(
       `SELECT po.*, COALESCE(s.name, po.vendor_name) as vendor_name 
        FROM purchase_orders po 
-       LEFT JOIN suppliers s ON po.vendor_id=s.id
+       LEFT JOIN vendors s ON po.vendor_id=s.id
        WHERE po.status IN ('approved','Approved') 
-       AND po.expected_delivery_date BETWEEN NOW() AND NOW()+INTERVAL '3 days'
+       AND po.expected_date BETWEEN NOW() AND NOW()+INTERVAL '3 days'
        LIMIT 10`
     );
     if (!result.rows.length) return;
     const adminEmail = await getTenantAdminEmail(pool, tenantId);
     for (const po of result.rows) {
       const amount = parseFloat(po.total_amount || 0);
-      const daysLeft = Math.ceil((new Date(po.expected_delivery_date).getTime() - Date.now()) / 86400000);
+      const daysLeft = Math.ceil((new Date(po.expected_date).getTime() - Date.now()) / 86400000);
       await sendEmail(adminEmail,
         `PO Payment Due in ${daysLeft} days: ${po.po_number}`,
         `<div style="font-family:Arial;padding:20px;background:#FFFBEB;border-left:4px solid #D97706">
@@ -349,7 +349,7 @@ export async function checkVendorPaymentSchedule(pool: Pool, tenantId: string): 
 // CRON JOBS
 // ============================================================
 
-// ── Ensure automation_logs table exists with correct schema ──
+// â”€â”€ Ensure automation_logs table exists with correct schema â”€â”€
 async function ensureAutomationLogs(pool: Pool): Promise<void> {
   try {
     await pool.query(`
