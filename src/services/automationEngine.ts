@@ -1,6 +1,6 @@
-// v2 - dynamic tenant email
+﻿// v2 - dynamic tenant email
 // ============================================================
-// Deemona AI Finance OS — Complete Automation Engine
+// Deemona AI Finance OS â€” Complete Automation Engine
 // File: src/services/automationEngine.ts
 // Handles all 10 automation workflows
 // ============================================================
@@ -10,7 +10,7 @@ import Anthropic from '@anthropic-ai/sdk';
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-// ── Email helper ──────────────────────────────────────────────
+// â”€â”€ Email helper â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 async function sendEmail(to: string | string[], subject: string, html: string): Promise<boolean> {
   const key = process.env.RESEND_API_KEY;
   if (!key) return false;
@@ -29,7 +29,7 @@ async function sendEmail(to: string | string[], subject: string, html: string): 
   } catch { return false; }
 }
 
-// ── WhatsApp helper ───────────────────────────────────────────
+// â”€â”€ WhatsApp helper â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 async function sendWhatsApp(to: string, message: string): Promise<boolean> {
   const sid = process.env.TWILIO_ACCOUNT_SID;
   const token = process.env.TWILIO_AUTH_TOKEN;
@@ -51,7 +51,7 @@ async function sendWhatsApp(to: string, message: string): Promise<boolean> {
   } catch { return false; }
 }
 
-// ── Log automation event ──────────────────────────────────────
+// â”€â”€ Log automation event â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 async function logAutomation(pool: Pool, tenantId: string, type: string, status: string, detail: string) {
   try {
     await pool.query(
@@ -66,7 +66,7 @@ async function logAutomation(pool: Pool, tenantId: string, type: string, status:
 
 // ============================================================
 // 1. INVOICE AUTO-APPROVAL
-// Triggered when AP invoice created — auto-approves if under threshold
+// Triggered when AP invoice created â€” auto-approves if under threshold
 // ============================================================
 export async function handleInvoiceAutoApproval(pool: Pool, tenantId: string, invoiceId: string): Promise<void> {
   try {
@@ -169,7 +169,7 @@ export async function handleWhatsAppApprovalReply(pool: Pool, from: string, body
       `Invoice ${invoice.invoice_number} ${newStatus} via WhatsApp from ${from}`);
 
     const amount = parseFloat(invoice.total_amount || 0);
-    return `✅ Invoice ${invoice.invoice_number} has been *${newStatus.toUpperCase()}*.\nAmount: Rs ${amount.toLocaleString('en-IN')}\nProcessed via WhatsApp approval.`;
+    return `âœ… Invoice ${invoice.invoice_number} has been *${newStatus.toUpperCase()}*.\nAmount: Rs ${amount.toLocaleString('en-IN')}\nProcessed via WhatsApp approval.`;
   } catch (e) {
     return 'Error processing approval. Please try again or use the Deemona Finance app.';
   }
@@ -245,12 +245,12 @@ export async function checkLowCashAlert(pool: Pool, tenantId: string): Promise<v
       const adminEmail = recipients[0];
       const managerPhone = await getManagerPhone(pool, tenantId);
 
-      const message = `*Deemona Finance - CASH ALERT*\n\nCurrent Cash Position: Rs ${totalCash.toLocaleString('en-IN')}\nMonthly Burn: Rs ${monthlyBurn.toLocaleString('en-IN')}\nRunway: ${runway} months\n\n⚠️ Cash below Rs 20L threshold. Immediate action required.`;
+      const message = `*Deemona Finance - CASH ALERT*\n\nCurrent Cash Position: Rs ${totalCash.toLocaleString('en-IN')}\nMonthly Burn: Rs ${monthlyBurn.toLocaleString('en-IN')}\nRunway: ${runway} months\n\nâš ï¸ Cash below Rs 20L threshold. Immediate action required.`;
 
       if (managerPhone) await sendWhatsApp(managerPhone, message);
 
       await sendEmail(adminEmail,
-        '⚠️ URGENT: Low Cash Alert — Deemona Finance',
+        'âš ï¸ URGENT: Low Cash Alert â€” Deemona Finance',
         `<div style="font-family:Arial;padding:20px;background:#FEF2F2;border-left:4px solid #DC2626">
         <h2 style="color:#DC2626">Low Cash Alert</h2>
         <p>Cash position has fallen below the alert threshold.</p>
@@ -297,15 +297,15 @@ export async function checkComplianceAlerts(pool: Pool, tenantId: string): Promi
       const daysLeft = Math.ceil((new Date(item.due_date).getTime() - Date.now()) / 86400000);
       const isUrgent = daysLeft <= 2;
 
-      const message = `${isUrgent ? '🚨 URGENT' : '⚠️'} *Compliance Deadline*\n\n${item.title}\nDue: ${new Date(item.due_date).toLocaleDateString('en-IN')} (${daysLeft} days)\n${item.penalty_amount ? `Penalty: Rs ${parseFloat(item.penalty_amount).toLocaleString('en-IN')}` : ''}\n\nFile on time to avoid penalties.`;
+      const message = `${isUrgent ? 'ðŸš¨ URGENT' : 'âš ï¸'} *Compliance Deadline*\n\n${item.title}\nDue: ${new Date(item.due_date).toLocaleDateString('en-IN')} (${daysLeft} days)\n${item.penalty_amount ? `Penalty: Rs ${parseFloat(item.penalty_amount).toLocaleString('en-IN')}` : ''}\n\nFile on time to avoid penalties.`;
 
       if (managerPhone) await sendWhatsApp(managerPhone, message);
 
       await sendEmail(adminEmail,
-        `${isUrgent ? '🚨 URGENT: ' : '⚠️ '}Compliance Due in ${daysLeft} days: ${item.title}`,
+        `${isUrgent ? 'ðŸš¨ URGENT: ' : 'âš ï¸ '}Compliance Due in ${daysLeft} days: ${item.title}`,
         `<div style="font-family:Arial;padding:20px;background:${isUrgent?'#FEF2F2':'#FFFBEB'};border-left:4px solid ${isUrgent?'#DC2626':'#D97706'}">
         <h2 style="color:${isUrgent?'#DC2626':'#D97706'}">${item.title}</h2>
-        <p>Due in <strong>${daysLeft} days</strong> — ${new Date(item.due_date).toLocaleDateString('en-IN')}</p>
+        <p>Due in <strong>${daysLeft} days</strong> â€” ${new Date(item.due_date).toLocaleDateString('en-IN')}</p>
         ${item.penalty_amount ? `<p>Penalty for late filing: <strong>Rs ${parseFloat(item.penalty_amount).toLocaleString('en-IN')}</strong></p>` : ''}
         <p style="color:#64748B;font-size:12px">Deemona AI Finance OS | Compliance Monitor</p></div>`
       );
@@ -352,7 +352,7 @@ Keep it warm, professional, 3 short paragraphs. No placeholders.`
     const emailBody = (aiResponse.content[0] as any).text || 'Thank you for your interest.';
 
     await sendEmail(lead.contact_email,
-      `Thank you for your interest — ${tenantName}`,
+      `Thank you for your interest â€” ${tenantName}`,
       `<div style="font-family:Arial;padding:24px;max-width:600px">
       <h2 style="color:#1B4FD8">Welcome, ${lead.contact_name}!</h2>
       ${emailBody.split('\n').map(p => p ? `<p>${p}</p>` : '').join('')}
@@ -391,7 +391,7 @@ export async function runBankReconciliation(pool: Pool, tenantId: string): Promi
     for (const txn of transactions.rows) {
       const amount = parseFloat(txn.credit_amount);
 
-      // Try to find matching AR invoice by amount (±1% tolerance)
+      // Try to find matching AR invoice by amount (Â±1% tolerance)
       const invoice = await pool.query(
         `SELECT * FROM ar_invoices 
          WHERE tenant_id=$1 AND status IN ('sent','overdue')
@@ -455,7 +455,7 @@ export async function checkVendorPaymentSchedule(pool: Pool, tenantId: string): 
 
       // Notify admin to process payment
       await sendEmail(adminEmail,
-        `Payment Due in ${daysLeft} days: ${inv.invoice_number} — Rs ${amount.toLocaleString('en-IN')}`,
+        `Payment Due in ${daysLeft} days: ${inv.invoice_number} â€” Rs ${amount.toLocaleString('en-IN')}`,
         `<div style="font-family:Arial;padding:20px;background:#FFFBEB;border-left:4px solid #D97706">
         <h2 style="color:#D97706">Vendor Payment Due Soon</h2>
         <p>Invoice <strong>${inv.invoice_number}</strong> from <strong>${inv.vendor_name}</strong> is due in <strong>${daysLeft} days</strong>.</p>
@@ -484,7 +484,7 @@ export async function checkVendorPaymentSchedule(pool: Pool, tenantId: string): 
 }
 
 // ============================================================
-// CRON JOBS — Register all scheduled automations
+// CRON JOBS â€” Register all scheduled automations
 // ============================================================
 export function registerAutomationCrons(pool: Pool): void {
   const HOUR = 3600000;
@@ -493,7 +493,7 @@ export function registerAutomationCrons(pool: Pool): void {
 
   console.log('[Automation] Registering automation cron jobs...');
 
-  // Every 15 minutes — check all active tenants
+  // Every 15 minutes â€” check all active tenants
   setInterval(async () => {
     try {
       const tenants = await pool.query(`SELECT id FROM tenants WHERE is_active=true LIMIT 100`);
@@ -509,7 +509,7 @@ export function registerAutomationCrons(pool: Pool): void {
     } catch (e) { console.error('[Automation Cron] Error:', e); }
   }, 15 * MINUTE);
 
-  // Every hour — bank reconciliation
+  // Every hour â€” bank reconciliation
   setInterval(async () => {
     try {
       const tenants = await pool.query(`SELECT id FROM tenants WHERE is_active=true LIMIT 100`);
@@ -522,7 +522,7 @@ export function registerAutomationCrons(pool: Pool): void {
     } catch (e) { console.error('[Automation Cron] Bank recon error:', e); }
   }, HOUR);
 
-  // Daily at 9 AM IST (3:30 AM UTC) — GST filing reminder on 13th
+  // Daily at 9 AM IST (3:30 AM UTC) â€” GST filing reminder on 13th
   setInterval(async () => {
     const now = new Date();
     const utcHour = now.getUTCHours();
@@ -532,9 +532,9 @@ export function registerAutomationCrons(pool: Pool): void {
     if (day === 13 && utcHour === 3) {
       const tenants = await pool.query(`SELECT id FROM tenants WHERE is_active=true`);
       for (const tenant of tenants.rows) {
-        const adminEmail = await getTenantAdminEmail(pool, tenantId);
+        const adminEmail = await getTenantAdminEmail(pool, tenant.id);
         await sendEmail(adminEmail,
-          '🚨 GST Filing Due in 5 Days — File GSTR-3B Now',
+          'ðŸš¨ GST Filing Due in 5 Days â€” File GSTR-3B Now',
           `<div style="font-family:Arial;padding:20px;background:#FEF2F2;border-left:4px solid #DC2626">
           <h2 style="color:#DC2626">GSTR-3B Due in 5 Days</h2>
           <p>GSTR-3B for ${now.toLocaleString('en-IN', {month:'long'})} ${now.getFullYear()} is due on the 20th.</p>
@@ -550,9 +550,9 @@ export function registerAutomationCrons(pool: Pool): void {
     if (day === 28 && utcHour === 3) {
       const tenants = await pool.query(`SELECT id FROM tenants WHERE is_active=true`);
       for (const tenant of tenants.rows) {
-        const adminEmail = await getTenantAdminEmail(pool, tenantId);
+        const adminEmail = await getTenantAdminEmail(pool, tenant.id);
         await sendEmail(adminEmail,
-          '💰 Payroll Processing Reminder',
+          'ðŸ’° Payroll Processing Reminder',
           `<div style="font-family:Arial;padding:20px;background:#EEF3FD;border-left:4px solid #1B4FD8">
           <h2 style="color:#1B4FD8">Payroll Due</h2>
           <p>Monthly payroll for ${now.toLocaleString('en-IN', {month:'long'})} ${now.getFullYear()} should be processed today.</p>
@@ -564,11 +564,11 @@ export function registerAutomationCrons(pool: Pool): void {
     }
   }, HOUR); // Check every hour
 
-  console.log('[Automation] ✓ Cron jobs registered: Cash alerts (15min), Bank recon (hourly), GST/Payroll reminders (daily)');
+  console.log('[Automation] âœ“ Cron jobs registered: Cash alerts (15min), Bank recon (hourly), GST/Payroll reminders (daily)');
 }
 
 
-// ── Get tenant admin email dynamically ───────────────────────
+// â”€â”€ Get tenant admin email dynamically â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 async function getTenantAdminEmail(pool: Pool, tenantId: string): Promise<string> {
   try {
     // 1. Check monitor settings recipients first
@@ -592,7 +592,7 @@ async function getTenantAdminEmail(pool: Pool, tenantId: string): Promise<string
   }
 }
 
-// ── Get all tenant notification emails ────────────────────────
+// â”€â”€ Get all tenant notification emails â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 async function getTenantNotificationEmails(pool: Pool, tenantId: string): Promise<string[]> {
   try {
     const monitor = await pool.query(
@@ -611,7 +611,7 @@ async function getTenantNotificationEmails(pool: Pool, tenantId: string): Promis
   }
 }
 
-// ── Helper functions ──────────────────────────────────────────
+// â”€â”€ Helper functions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 async function getManagerPhone(pool: Pool, tenantId: string): Promise<string | null> {
   try {
     const result = await pool.query(
