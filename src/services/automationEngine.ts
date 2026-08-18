@@ -1,4 +1,4 @@
-import { Pool } from 'pg';
+﻿import { Pool } from 'pg';
 import Anthropic from '@anthropic-ai/sdk';
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -82,7 +82,7 @@ async function getManagerPhone(pool, tenantId) {
 
 async function getMonthlyBurn(pool, tenantId) {
   try {
-    const result = await pool.query('SELECT COALESCE(SUM(total_amount),0) as burn FROM expense_claims WHERE created_at > NOW()-INTERVAL '30 days'');
+    const result = await pool.query('SELECT COALESCE(SUM(total_amount),0) as burn FROM expense_claims WHERE created_at > NOW()-INTERVAL \'30 days\');
     return parseFloat(result.rows[0] ? result.rows[0].burn : 0);
   } catch { return 0; }
 }
@@ -211,7 +211,7 @@ export async function runBankReconciliation(pool, tenantId) {
 export async function checkVendorPaymentSchedule(pool, tenantId) {
   try {
     const result = await pool.query(
-      'SELECT po.*, v.name as vendor_name FROM purchase_orders po LEFT JOIN vendors v ON po.vendor_id=v.id WHERE po.status IN ('approved','Approved') AND po.expected_date BETWEEN NOW() AND NOW()+INTERVAL '3 days' LIMIT 10'
+      "SELECT po.*, v.name as vendor_name FROM purchase_orders po LEFT JOIN vendors v ON po.vendor_id=v.id WHERE po.status IN ('approved','Approved') AND po.expected_date BETWEEN NOW() AND NOW()+INTERVAL '3 days' LIMIT 10"
     );
     if (!result.rows.length) return;
     const adminEmail = await getTenantAdminEmail(pool, tenantId);
