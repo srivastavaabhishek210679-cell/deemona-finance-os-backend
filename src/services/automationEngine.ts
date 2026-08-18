@@ -17,7 +17,7 @@ async function sendEmail(to, subject, html) {
       }),
     });
     const d = await res.json();
-    return !!d.id;
+    return !!(d as any).id;
   } catch { return false; }
 }
 
@@ -38,7 +38,7 @@ async function sendWhatsApp(to, message) {
       body: body.toString(),
     });
     const d = await res.json();
-    return !!d.sid;
+    return !!(d as any).sid;
   } catch { return false; }
 }
 
@@ -194,7 +194,7 @@ export async function handleNewLeadNurture(pool, tenantId, leadId) {
       model: 'claude-sonnet-4-6', max_tokens: 400,
       messages: [{ role: 'user', content: 'Write a 2-paragraph professional welcome email for a new sales lead named ' + (lead.contact_name || lead.name) + '. Be warm and professional.' }]
     });
-    const emailBody = aiResponse.content[0].text || 'Thank you for your interest.';
+    const emailBody = (aiResponse.content[0] as any).text || 'Thank you for your interest.';
     await sendEmail(lead.contact_email || adminEmail, 'Thank you for your interest',
       '<div style="font-family:Arial;padding:20px"><h2 style="color:#1B4FD8">Welcome!</h2>' +
       emailBody.split('\n').map(p => p ? '<p>' + p + '</p>' : '').join('') +
