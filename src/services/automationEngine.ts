@@ -1004,8 +1004,8 @@ async function analyzeBudgetReallocation(pool, tenantId) {
       // Days into budget period
       const start = new Date(b.start_date || b.created_at);
       const end = new Date(b.end_date);
-      const totalDays = Math.max(1, Math.ceil((end - start) / 86400000));
-      const elapsed = Math.ceil((Date.now() - start) / 86400000);
+      const totalDays = Math.max(1, Math.ceil((end.getTime() - start.getTime()) / 86400000));
+      const elapsed = Math.ceil((Date.now() - start.getTime()) / 86400000);
       const expectedPct = (elapsed / totalDays) * 100;
 
       if (pct < expectedPct - 20 && remaining > 50000) {
@@ -1085,7 +1085,7 @@ async function checkContractRenewals(pool, tenantId) {
     if (!contracts.rows.length) return;
 
     for (const contract of contracts.rows) {
-      const daysLeft = Math.ceil((new Date(contract.end_date) - Date.now()) / 86400000);
+      const daysLeft = Math.ceil((new Date(contract.end_date).getTime() - Date.now()) / 86400000);
       const alreadySent = await pool.query(
         "SELECT id FROM automation_logs WHERE automation_type='CONTRACT_RENEWAL' AND detail LIKE $1 AND created_at > NOW()-INTERVAL '7 days'",
         ['%' + contract.id + '%']
@@ -1122,7 +1122,7 @@ async function trackInsurancePremiums(pool, tenantId) {
     if (!policies.rows.length) return;
 
     for (const policy of policies.rows) {
-      const daysLeft = Math.ceil((new Date(policy.expiry_date) - Date.now()) / 86400000);
+      const daysLeft = Math.ceil((new Date(policy.expiry_date).getTime() - Date.now()) / 86400000);
       const alreadySent = await pool.query(
         "SELECT id FROM automation_logs WHERE automation_type='INSURANCE_ALERT' AND detail LIKE $1 AND created_at > NOW()-INTERVAL '7 days'",
         ['%' + policy.id + '%']
@@ -1225,7 +1225,7 @@ async function checkAppraisalTriggers(pool, tenantId) {
       ).catch(() => ({ rows: [] }));
       if (alreadySent.rows.length > 0) continue;
 
-      const daysToAnniversary = 365 - Math.ceil((Date.now() - new Date(emp.join_date)) / 86400000);
+      const daysToAnniversary = 365 - Math.ceil((Date.now() - new Date(emp.join_date).getTime()) / 86400000);
       const joinDate = new Date(emp.join_date).toLocaleDateString('en-IN');
       const anniversary = new Date(new Date(emp.join_date).setFullYear(new Date().getFullYear())).toLocaleDateString('en-IN');
 
