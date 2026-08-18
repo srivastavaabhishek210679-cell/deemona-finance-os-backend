@@ -1,4 +1,4 @@
-﻿// v2 - dynamic tenant email
+﻿// v3 - correct table names
 // ============================================================
 // Deemona AI Finance OS â€” Complete Automation Engine
 // File: src/services/automationEngine.ts
@@ -56,8 +56,7 @@ async function logAutomation(pool: Pool, tenantId: string, type: string, status:
   try {
     await pool.query(
       `INSERT INTO automation_logs (tenant_id, automation_type, status, detail, created_at)
-       VALUES ($1,$2,$3,$4,NOW())
-       ON CONFLICT DO NOTHING`,
+       VALUES ($1::uuid,$2,$3,$4,NOW())`,
       [tenantId, type, status, detail]
     );
   } catch {}
@@ -72,8 +71,8 @@ export async function handleInvoiceAutoApproval(pool: Pool, tenantId: string, in
   try {
     const inv = await pool.query(
       `SELECT i.*, v.name as vendor_name, v.phone as vendor_phone
-       FROM ap_invoices i LEFT JOIN vendors v ON i.vendor_id=v.id
-       WHERE i.id=$1 AND i.tenant_id=$2`,
+       FROM generated_invoices i LEFT JOIN vendors v ON i.vendor_id=v.id
+       WHERE i.invoice_invoice_id=$1 AND i.tenant_id=$2`,
       [invoiceId, tenantId]
     );
     if (!inv.rows.length) return;
@@ -85,7 +84,7 @@ export async function handleInvoiceAutoApproval(pool: Pool, tenantId: string, in
 
     if (amount <= AUTO_APPROVE_THRESHOLD && invoice.status === 'pending') {
       await pool.query(
-        `UPDATE ap_invoices SET status='approved', approved_at=NOW(), approved_by='Auto-Approval Engine', updated_at=NOW() WHERE id=$1`,
+        `UPDATE generated_invoices SET status='approved', approved_at=NOW(), approved_by='Auto-Approval Engine', updated_at=NOW() WHERE invoice_id=$1`,
         [invoiceId]
       );
 
@@ -146,7 +145,7 @@ export async function handleWhatsAppApprovalReply(pool: Pool, from: string, body
   try {
     // Find invoice by partial ID
     const result = await pool.query(
-      `SELECT i.*, t.id as tenant_id FROM ap_invoices i 
+      `SELECT i.*, t.id as tenant_id FROM generated_invoices i 
        JOIN tenants t ON i.tenant_id=t.id
        WHERE i.id::text LIKE $1 AND i.status='pending'
        LIMIT 1`,
@@ -161,7 +160,7 @@ export async function handleWhatsAppApprovalReply(pool: Pool, from: string, body
     const newStatus = isApprove ? 'approved' : 'rejected';
 
     await pool.query(
-      `UPDATE ap_invoices SET status=$1, approved_at=NOW(), approved_by='WhatsApp Approval', updated_at=NOW() WHERE id=$2`,
+      `UPDATE generated_invoices SET status=$1, approved_at=NOW(), approved_by='WhatsApp Approval', updated_at=NOW() WHERE id=$2`,
       [newStatus, invoice.id]
     );
 
@@ -183,8 +182,8 @@ export async function handleExpenseAutoApproval(pool: Pool, tenantId: string, cl
   try {
     const claim = await pool.query(
       `SELECT ec.*, e.first_name, e.last_name, e.email
-       FROM expense_claims ec LEFT JOIN employees e ON ec.employee_id=e.id
-       WHERE ec.id=$1 AND ec.tenant_id=$2`,
+       FROM expenses ec LEFT JOIN employees e ON ec.employee_id=e.id
+       WHERE ec.invoice_id=$1 AND ec.tenant_id=$2`,
       [claimId, tenantId]
     );
     if (!claim.rows.length) return;
@@ -194,7 +193,7 @@ export async function handleExpenseAutoApproval(pool: Pool, tenantId: string, cl
 
     if (amount <= AUTO_APPROVE_LIMIT && expense.status === 'submitted') {
       await pool.query(
-        `UPDATE expense_claims SET status='approved', approved_at=NOW(), approved_by='Auto-Approval', updated_at=NOW() WHERE id=$1`,
+        `UPDATE expenses SET status='approved', approved_at=NOW(), approved_by='Auto-Approval', updated_at=NOW() WHERE invoice_id=$1`,
         [claimId]
       );
 
@@ -224,7 +223,7 @@ export async function handleExpenseAutoApproval(pool: Pool, tenantId: string, cl
 export async function checkLowCashAlert(pool: Pool, tenantId: string): Promise<void> {
   try {
     const result = await pool.query(
-      `SELECT SUM(current_balance) as total_cash FROM bank_accounts WHERE tenant_id=$1 AND is_active=true`,
+      `SELECT SUM(current_balance) as total_cash FROM bank_accounts WHERE tenant_invoice_id=$1 AND is_active=true`,
       [tenantId]
     );
     const totalCash = parseFloat(result.rows[0]?.total_cash || 0);
@@ -232,7 +231,7 @@ export async function checkLowCashAlert(pool: Pool, tenantId: string): Promise<v
 
     // Check if alert already sent today
     const alertCheck = await pool.query(
-      `SELECT id FROM automation_logs WHERE tenant_id=$1 AND automation_type='LOW_CASH_ALERT' AND created_at > NOW()-INTERVAL '24 hours'`,
+      `SELECT id FROM automation_logs WHERE tenant_invoice_id=$1 AND automation_type='LOW_CASH_ALERT' AND created_at > NOW()-INTERVAL '24 hours'`,
       [tenantId]
     );
     if (alertCheck.rows.length > 0) return; // Already alerted today
@@ -278,11 +277,11 @@ export async function checkComplianceAlerts(pool: Pool, tenantId: string): Promi
   try {
     const result = await pool.query(
       `SELECT * FROM compliance_items 
-       WHERE tenant_id=$1 AND status='pending' 
+       WHERE tenant_invoice_id=$1 AND status='pending' 
        AND due_date BETWEEN NOW() AND NOW() + INTERVAL '7 days'
        AND id NOT IN (
          SELECT detail::text FROM automation_logs 
-         WHERE tenant_id=$1 AND automation_type='COMPLIANCE_ALERT' 
+         WHERE tenant_invoice_id=$1 AND automation_type='COMPLIANCE_ALERT' 
          AND created_at > NOW()-INTERVAL '24 hours'
        )`,
       [tenantId]
@@ -324,7 +323,7 @@ export async function checkComplianceAlerts(pool: Pool, tenantId: string): Promi
 export async function handleNewLeadNurture(pool: Pool, tenantId: string, leadId: string): Promise<void> {
   try {
     const result = await pool.query(
-      `SELECT * FROM crm_leads WHERE id=$1 AND tenant_id=$2`,
+      `SELECT * FROM deals WHERE invoice_id=$1 AND tenant_id=$2`,
       [leadId, tenantId]
     );
     if (!result.rows.length) return;
@@ -332,7 +331,7 @@ export async function handleNewLeadNurture(pool: Pool, tenantId: string, leadId:
     if (!lead.contact_email) return;
 
     // Get tenant name
-    const tenant = await pool.query('SELECT name FROM tenants WHERE id=$1', [tenantId]);
+    const tenant = await pool.query('SELECT name FROM tenants WHERE invoice_id=$1', [tenantId]);
     const tenantName = tenant.rows[0]?.name || 'Deemona Technologies';
 
     // Generate personalized intro email using Claude
@@ -384,7 +383,7 @@ export async function runBankReconciliation(pool: Pool, tenantId: string): Promi
   try {
     // Get unreconciled bank transactions
     const transactions = await pool.query(
-      `SELECT * FROM bank_transactions WHERE tenant_id=$1 AND reconciled=false AND credit_amount > 0 ORDER BY transaction_date DESC LIMIT 100`,
+      `SELECT * FROM vendor_payments WHERE tenant_invoice_id=$1 AND reconciled=false AND credit_amount > 0 ORDER BY transaction_date DESC LIMIT 100`,
       [tenantId]
     );
 
@@ -393,8 +392,8 @@ export async function runBankReconciliation(pool: Pool, tenantId: string): Promi
 
       // Try to find matching AR invoice by amount (Â±1% tolerance)
       const invoice = await pool.query(
-        `SELECT * FROM ar_invoices 
-         WHERE tenant_id=$1 AND status IN ('sent','overdue')
+        `SELECT * FROM generated_invoices 
+         WHERE tenant_invoice_id=$1 AND status IN ('sent','overdue')
          AND ABS(total_amount::numeric - $2) < $2 * 0.01
          ORDER BY due_date ASC LIMIT 1`,
         [tenantId, amount]
@@ -404,12 +403,12 @@ export async function runBankReconciliation(pool: Pool, tenantId: string): Promi
         const inv = invoice.rows[0];
         // Mark transaction as reconciled
         await pool.query(
-          `UPDATE bank_transactions SET reconciled=true, reconciled_invoice_id=$1, updated_at=NOW() WHERE id=$2`,
+          `UPDATE vendor_payments SET reconciled=true, reconciled_invoice_invoice_id=$1, updated_at=NOW() WHERE id=$2`,
           [inv.id, txn.id]
         );
         // Mark invoice as paid
         await pool.query(
-          `UPDATE ar_invoices SET status='paid', paid_date=NOW(), updated_at=NOW() WHERE id=$1`,
+          `UPDATE generated_invoices SET status='paid', paid_date=NOW(), updated_at=NOW() WHERE invoice_id=$1`,
           [inv.id]
         );
         matched++;
@@ -434,12 +433,12 @@ export async function checkVendorPaymentSchedule(pool: Pool, tenantId: string): 
   try {
     const result = await pool.query(
       `SELECT ap.*, v.name as vendor_name, v.email as vendor_email, v.phone as vendor_phone
-       FROM ap_invoices ap LEFT JOIN vendors v ON ap.vendor_id=v.id
-       WHERE ap.tenant_id=$1 AND ap.status='approved'
+       FROM generated_invoices ap LEFT JOIN vendors v ON ap.vendor_id=v.id
+       WHERE ap.tenant_invoice_id=$1 AND ap.status='approved'
        AND ap.due_date BETWEEN NOW() AND NOW()+INTERVAL '3 days'
        AND ap.id NOT IN (
          SELECT detail FROM automation_logs 
-         WHERE tenant_id=$1 AND automation_type='PAYMENT_SCHEDULED'
+         WHERE tenant_invoice_id=$1 AND automation_type='PAYMENT_SCHEDULED'
          AND created_at > NOW()-INTERVAL '24 hours'
        )`,
       [tenantId]
@@ -573,14 +572,14 @@ async function getTenantAdminEmail(pool: Pool, tenantId: string): Promise<string
   try {
     // 1. Check monitor settings recipients first
     const monitor = await pool.query(
-      'SELECT recipients FROM monitor_settings WHERE tenant_id=$1 AND enabled=true LIMIT 1',
+      'SELECT recipients FROM monitor_settings WHERE tenant_invoice_id=$1 AND enabled=true LIMIT 1',
       [tenantId]
     );
     if (monitor.rows[0]?.recipients?.length > 0) return monitor.rows[0].recipients[0];
     
     // 2. Check tenant admin user email
     const admin = await pool.query(
-      "SELECT email FROM users WHERE tenant_id=$1 AND role IN ('admin','owner') ORDER BY created_at ASC LIMIT 1",
+      "SELECT email FROM users WHERE tenant_invoice_id=$1 AND role IN ('admin','owner') ORDER BY created_at ASC LIMIT 1",
       [tenantId]
     );
     if (admin.rows[0]?.email) return admin.rows[0].email;
@@ -596,12 +595,12 @@ async function getTenantAdminEmail(pool: Pool, tenantId: string): Promise<string
 async function getTenantNotificationEmails(pool: Pool, tenantId: string): Promise<string[]> {
   try {
     const monitor = await pool.query(
-      'SELECT recipients FROM monitor_settings WHERE tenant_id=$1 LIMIT 1',
+      'SELECT recipients FROM monitor_settings WHERE tenant_invoice_id=$1 LIMIT 1',
       [tenantId]
     );
     if (monitor.rows[0]?.recipients?.length > 0) return monitor.rows[0].recipients;
     const admin = await pool.query(
-      "SELECT email FROM users WHERE tenant_id=$1 AND role IN ('admin','owner') ORDER BY created_at ASC LIMIT 3",
+      "SELECT email FROM users WHERE tenant_invoice_id=$1 AND role IN ('admin','owner') ORDER BY created_at ASC LIMIT 3",
       [tenantId]
     );
     if (admin.rows.length > 0) return admin.rows.map((r: any) => r.email);
@@ -615,7 +614,7 @@ async function getTenantNotificationEmails(pool: Pool, tenantId: string): Promis
 async function getManagerPhone(pool: Pool, tenantId: string): Promise<string | null> {
   try {
     const result = await pool.query(
-      `SELECT phone FROM employees WHERE tenant_id=$1 AND role IN ('manager','admin','owner') AND phone IS NOT NULL LIMIT 1`,
+      `SELECT phone FROM employees WHERE tenant_invoice_id=$1 AND role IN ('manager','admin','owner') AND phone IS NOT NULL LIMIT 1`,
       [tenantId]
     );
     return result.rows[0]?.phone || null;
@@ -625,8 +624,8 @@ async function getManagerPhone(pool: Pool, tenantId: string): Promise<string | n
 async function getMonthlyBurn(pool: Pool, tenantId: string): Promise<number> {
   try {
     const result = await pool.query(
-      `SELECT COALESCE(SUM(total_amount),0) as burn FROM ap_invoices 
-       WHERE tenant_id=$1 AND status IN ('approved','paid') 
+      `SELECT COALESCE(SUM(total_amount),0) as burn FROM generated_invoices 
+       WHERE tenant_invoice_id=$1 AND status IN ('approved','paid') 
        AND created_at > NOW()-INTERVAL '30 days'`,
       [tenantId]
     );
