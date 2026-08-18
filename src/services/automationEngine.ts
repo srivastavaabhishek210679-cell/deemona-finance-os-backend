@@ -1,3 +1,4 @@
+// v2 - dynamic tenant email
 // ============================================================
 // Deemona AI Finance OS — Complete Automation Engine
 // File: src/services/automationEngine.ts
@@ -96,7 +97,7 @@ export async function handleInvoiceAutoApproval(pool: Pool, tenantId: string, in
       }
 
       // Send email notification
-      const adminEmail = process.env.ADMIN_EMAIL || 'admin@deemona.com';
+      const adminEmail = await getTenantAdminEmail(pool, tenantId);
       await sendEmail(adminEmail,
         `Auto-Approved: Invoice ${invoice.invoice_number}`,
         `<div style="font-family:Arial;padding:20px"><h2 style="color:#1B4FD8">Invoice Auto-Approved</h2>
@@ -240,7 +241,8 @@ export async function checkLowCashAlert(pool: Pool, tenantId: string): Promise<v
       const monthlyBurn = await getMonthlyBurn(pool, tenantId);
       const runway = monthlyBurn > 0 ? (totalCash / monthlyBurn).toFixed(1) : 'N/A';
 
-      const adminEmail = process.env.ADMIN_EMAIL || 'admin@deemona.com';
+      const recipients = await getTenantNotificationEmails(pool, tenantId);
+      const adminEmail = recipients[0];
       const managerPhone = await getManagerPhone(pool, tenantId);
 
       const message = `*Deemona Finance - CASH ALERT*\n\nCurrent Cash Position: Rs ${totalCash.toLocaleString('en-IN')}\nMonthly Burn: Rs ${monthlyBurn.toLocaleString('en-IN')}\nRunway: ${runway} months\n\n⚠️ Cash below Rs 20L threshold. Immediate action required.`;
@@ -288,7 +290,7 @@ export async function checkComplianceAlerts(pool: Pool, tenantId: string): Promi
 
     if (!result.rows.length) return;
 
-    const adminEmail = process.env.ADMIN_EMAIL || 'admin@deemona.com';
+    const adminEmail = await getTenantAdminEmail(pool, tenantId);
     const managerPhone = await getManagerPhone(pool, tenantId);
 
     for (const item of result.rows) {
@@ -445,7 +447,7 @@ export async function checkVendorPaymentSchedule(pool: Pool, tenantId: string): 
 
     if (!result.rows.length) return;
 
-    const adminEmail = process.env.ADMIN_EMAIL || 'admin@deemona.com';
+    const adminEmail = await getTenantAdminEmail(pool, tenantId);
 
     for (const inv of result.rows) {
       const amount = parseFloat(inv.total_amount);
@@ -530,7 +532,7 @@ export function registerAutomationCrons(pool: Pool): void {
     if (day === 13 && utcHour === 3) {
       const tenants = await pool.query(`SELECT id FROM tenants WHERE is_active=true`);
       for (const tenant of tenants.rows) {
-        const adminEmail = process.env.ADMIN_EMAIL || 'admin@deemona.com';
+        const adminEmail = await getTenantAdminEmail(pool, tenantId);
         await sendEmail(adminEmail,
           '🚨 GST Filing Due in 5 Days — File GSTR-3B Now',
           `<div style="font-family:Arial;padding:20px;background:#FEF2F2;border-left:4px solid #DC2626">
@@ -548,7 +550,7 @@ export function registerAutomationCrons(pool: Pool): void {
     if (day === 28 && utcHour === 3) {
       const tenants = await pool.query(`SELECT id FROM tenants WHERE is_active=true`);
       for (const tenant of tenants.rows) {
-        const adminEmail = process.env.ADMIN_EMAIL || 'admin@deemona.com';
+        const adminEmail = await getTenantAdminEmail(pool, tenantId);
         await sendEmail(adminEmail,
           '💰 Payroll Processing Reminder',
           `<div style="font-family:Arial;padding:20px;background:#EEF3FD;border-left:4px solid #1B4FD8">
@@ -563,6 +565,50 @@ export function registerAutomationCrons(pool: Pool): void {
   }, HOUR); // Check every hour
 
   console.log('[Automation] ✓ Cron jobs registered: Cash alerts (15min), Bank recon (hourly), GST/Payroll reminders (daily)');
+}
+
+
+// ── Get tenant admin email dynamically ───────────────────────
+async function getTenantAdminEmail(pool: Pool, tenantId: string): Promise<string> {
+  try {
+    // 1. Check monitor settings recipients first
+    const monitor = await pool.query(
+      'SELECT recipients FROM monitor_settings WHERE tenant_id=$1 AND enabled=true LIMIT 1',
+      [tenantId]
+    );
+    if (monitor.rows[0]?.recipients?.length > 0) return monitor.rows[0].recipients[0];
+    
+    // 2. Check tenant admin user email
+    const admin = await pool.query(
+      "SELECT email FROM users WHERE tenant_id=$1 AND role IN ('admin','owner') ORDER BY created_at ASC LIMIT 1",
+      [tenantId]
+    );
+    if (admin.rows[0]?.email) return admin.rows[0].email;
+    
+    // 3. Fall back to env var
+    return process.env.ADMIN_EMAIL || 'admin@deemona.com';
+  } catch {
+    return process.env.ADMIN_EMAIL || 'admin@deemona.com';
+  }
+}
+
+// ── Get all tenant notification emails ────────────────────────
+async function getTenantNotificationEmails(pool: Pool, tenantId: string): Promise<string[]> {
+  try {
+    const monitor = await pool.query(
+      'SELECT recipients FROM monitor_settings WHERE tenant_id=$1 LIMIT 1',
+      [tenantId]
+    );
+    if (monitor.rows[0]?.recipients?.length > 0) return monitor.rows[0].recipients;
+    const admin = await pool.query(
+      "SELECT email FROM users WHERE tenant_id=$1 AND role IN ('admin','owner') ORDER BY created_at ASC LIMIT 3",
+      [tenantId]
+    );
+    if (admin.rows.length > 0) return admin.rows.map((r: any) => r.email);
+    return [process.env.ADMIN_EMAIL || 'admin@deemona.com'];
+  } catch {
+    return [process.env.ADMIN_EMAIL || 'admin@deemona.com'];
+  }
 }
 
 // ── Helper functions ──────────────────────────────────────────
