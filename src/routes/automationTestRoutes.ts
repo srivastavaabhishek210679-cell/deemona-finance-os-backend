@@ -72,8 +72,8 @@ export function createAutomationTestRouter(pool: Pool): Router {
   router.post('/test/expense-approval', requireAuth, async (req: Request, res: Response) => {
     try {
       const result = await pool.query(
-        `INSERT INTO expense_claims (tenant_id, claim_number, employee_name, total_amount, status, date)
-         VALUES ($1, 'EXP-TEST-' || TO_CHAR(NOW(),'HH24MISS'), 'Test Employee', 8500, 'submitted', CURRENT_DATE)
+        `INSERT INTO expense_claims (tenant_id, claim_number, title, employee_name, total_amount, status, date)
+         VALUES ($1, 'EXP-TEST-' || TO_CHAR(NOW(),'HH24MISS'), 'Test Expense Claim', 'Test Employee', 8500, 'submitted', CURRENT_DATE)
          RETURNING id, title as claim_number`,
         [tid(req)]
       );
@@ -142,7 +142,7 @@ export function createAutomationTestRouter(pool: Pool): Router {
       const result = await pool.query(
         `INSERT INTO crm_leads (tenant_id, deal_name, customer_name, deal_value, stage, status, notes, expected_close)
          VALUES (1, 'Test Lead - Auto Nurture', 'Test Contact', 500000, 'Prospecting', 'Active', $2, NOW()+INTERVAL '30 days')
-         RETURNING id, deal_name as contact_name`,
+         RETURNING id, name as contact_name`,
         [tid(req), process.env.ADMIN_EMAIL || 'admin@deemona.com']
       );
       const lead = result.rows[0];
