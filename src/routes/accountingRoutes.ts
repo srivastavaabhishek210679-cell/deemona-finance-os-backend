@@ -1,3 +1,4 @@
+import { handleInvoiceAutoApproval } from '../services/automationEngine';
 ﻿// ============================================================
 // Deemona AI Finance OS — Accounting Routes
 // File: src/routes/accountingRoutes.ts

@@ -39,6 +39,7 @@ import { createSDKRouter } from './routes/sdkRoutes';
 import { createAIStudioRouter } from './routes/aiStudioRoutes';
 import { createRBACRouter } from './middleware/rbac';
 import { createMonitorSettingsRouter } from './routes/monitorSettingsRoutes';
+import { registerAutomationCrons, handleInvoiceAutoApproval, handleExpenseAutoApproval, handleNewLeadNurture, handleWhatsAppApprovalReply } from './services/automationEngine';
 import { startMultiTenantMonitor } from './services/driveMonitorMultiTenant';
 import { createNotificationRouter } from './routes/notificationRoutes';
 import { createBillingRouter } from './routes/billingRoutes';
@@ -213,6 +214,7 @@ async function start() {
   // Start autonomous Drive monitor if configured
   if (process.env.DRIVE_FOLDER_ID) {
     console.log('[Monitor] Starting autonomous Google Drive monitor...');
+    registerAutomationCrons(pool);
     startMultiTenantMonitor(pool).catch(err => {
       console.error('[Monitor] Fatal error:', err);
       // Restart after 30s — never permanently stop
