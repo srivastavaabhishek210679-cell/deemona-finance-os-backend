@@ -1,4 +1,4 @@
-// ============================================================
+﻿// ============================================================
 // Automation Test Routes + Logs API
 // File: src/routes/automationTestRoutes.ts
 // ============================================================
@@ -20,7 +20,7 @@ export function createAutomationTestRouter(pool: Pool): Router {
   const router = Router();
   const tid = (req: Request): string => (req as any).user?.tenantId || 'af1845e2-39f3-4e9d-b1ed-91c2798a0f6f';
 
-  // ── GET /api/automation/logs ──────────────────────────────
+  // â”€â”€ GET /api/automation/logs â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   router.get('/logs', requireAuth, async (req: Request, res: Response) => {
     try {
       const result = await pool.query(
@@ -32,7 +32,7 @@ export function createAutomationTestRouter(pool: Pool): Router {
     } catch (e) { res.json({ logs: [] }); }
   });
 
-  // ── GET /api/automation/stats ─────────────────────────────
+  // â”€â”€ GET /api/automation/stats â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   router.get('/stats', requireAuth, async (req: Request, res: Response) => {
     try {
       const result = await pool.query(
@@ -44,14 +44,14 @@ export function createAutomationTestRouter(pool: Pool): Router {
     } catch { res.json({ stats: [] }); }
   });
 
-  // ── POST /api/automation/test/invoice-approval ────────────
+  // â”€â”€ POST /api/automation/test/invoice-approval â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   router.post('/test/invoice-approval', requireAuth, async (req: Request, res: Response) => {
     try {
       // Create a test AP invoice under threshold
       const result = await pool.query(
-        `INSERT INTO generated_invoices (tenant_id, invoice_number, customer_name, total_amount, status, due_date, created_at)
-         VALUES (1, 'TEST-' || TO_CHAR(NOW(),'YYYYMMDD-HH24MISS'), 'Test Vendor', 25000, 'pending', NOW()+INTERVAL '30 days', NOW())
-         RETURNING invoice_id as id, invoice_number`,
+        `INSERT INTO ap_invoices (tenant_id, invoice_number, vendor_id, total_amount, status, date, due_date)
+         SELECT $1, 'TEST-' || TO_CHAR(NOW(),'YYYYMMDD-HH24MISS'), id, 25000, 'draft', CURRENT_DATE, CURRENT_DATE+30 FROM vendors WHERE tenant_id=$1 LIMIT 1
+         RETURNING id, invoice_number`,
         [tid(req)]
       );
       if (!result.rows.length) return res.json({ error: 'No vendors found. Add a vendor first.' }) as any;
@@ -68,13 +68,13 @@ export function createAutomationTestRouter(pool: Pool): Router {
     } catch (e) { res.json({ error: String(e) }); }
   });
 
-  // ── POST /api/automation/test/expense-approval ────────────
+  // â”€â”€ POST /api/automation/test/expense-approval â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   router.post('/test/expense-approval', requireAuth, async (req: Request, res: Response) => {
     try {
       const result = await pool.query(
-        `INSERT INTO expenses (tenant_id, title, description, amount, status, expense_date, employee_name, category, created_at)
-         VALUES (1, 'Test Expense', 'Auto-approval test', 8500, 'Pending', NOW(), 'Test Employee', 'Other', NOW())
-         RETURNING expense_id as id, title as claim_number`,
+        `INSERT INTO expense_claims (tenant_id, claim_number, employee_name, total_amount, status, date)
+         VALUES ($1, 'EXP-TEST-' || TO_CHAR(NOW(),'HH24MISS'), 'Test Employee', 8500, 'submitted', CURRENT_DATE)
+         RETURNING id, title as claim_number`,
         [tid(req)]
       );
       if (!result.rows.length) return res.json({ error: 'No employees found. Add an employee first.' }) as any;
@@ -89,7 +89,7 @@ export function createAutomationTestRouter(pool: Pool): Router {
     } catch (e) { res.json({ error: String(e) }); }
   });
 
-  // ── POST /api/automation/test/low-cash ───────────────────
+  // â”€â”€ POST /api/automation/test/low-cash â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   router.post('/test/low-cash', requireAuth, async (req: Request, res: Response) => {
     try {
       // Temporarily lower threshold by calling directly with a forced check
@@ -112,7 +112,7 @@ export function createAutomationTestRouter(pool: Pool): Router {
     } catch (e) { res.json({ error: String(e) }); }
   });
 
-  // ── POST /api/automation/test/compliance ─────────────────
+  // â”€â”€ POST /api/automation/test/compliance â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   router.post('/test/compliance', requireAuth, async (req: Request, res: Response) => {
     try {
       // Create a test compliance item due in 5 days
@@ -136,13 +136,13 @@ export function createAutomationTestRouter(pool: Pool): Router {
     } catch (e) { res.json({ error: String(e) }); }
   });
 
-  // ── POST /api/automation/test/lead-nurture ────────────────
+  // â”€â”€ POST /api/automation/test/lead-nurture â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   router.post('/test/lead-nurture', requireAuth, async (req: Request, res: Response) => {
     try {
       const result = await pool.query(
-        `INSERT INTO deals (tenant_id, deal_name, customer_name, deal_value, stage, status, notes, expected_close)
+        `INSERT INTO crm_leads (tenant_id, deal_name, customer_name, deal_value, stage, status, notes, expected_close)
          VALUES (1, 'Test Lead - Auto Nurture', 'Test Contact', 500000, 'Prospecting', 'Active', $2, NOW()+INTERVAL '30 days')
-         RETURNING deal_id as id, deal_name as contact_name`,
+         RETURNING id, deal_name as contact_name`,
         [tid(req), process.env.ADMIN_EMAIL || 'admin@deemona.com']
       );
       const lead = result.rows[0];
@@ -155,7 +155,7 @@ export function createAutomationTestRouter(pool: Pool): Router {
     } catch (e) { res.json({ error: String(e) }); }
   });
 
-  // ── POST /api/automation/test/bank-recon ─────────────────
+  // â”€â”€ POST /api/automation/test/bank-recon â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   router.post('/test/bank-recon', requireAuth, async (req: Request, res: Response) => {
     try {
       const result = await runBankReconciliation(pool, tid(req));
@@ -167,7 +167,7 @@ export function createAutomationTestRouter(pool: Pool): Router {
     } catch (e) { res.json({ error: String(e) }); }
   });
 
-  // ── POST /api/automation/test/vendor-payment ─────────────
+  // â”€â”€ POST /api/automation/test/vendor-payment â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   router.post('/test/vendor-payment', requireAuth, async (req: Request, res: Response) => {
     try {
       await pool.query(
@@ -187,7 +187,7 @@ export function createAutomationTestRouter(pool: Pool): Router {
     } catch (e) { res.json({ error: String(e) }); }
   });
 
-  // ── POST /api/automation/test/gst-reminder ────────────────
+  // â”€â”€ POST /api/automation/test/gst-reminder â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   router.post('/test/gst-reminder', requireAuth, async (req: Request, res: Response) => {
     try {
       const adminEmail = process.env.ADMIN_EMAIL || 'admin@deemona.com';
@@ -199,7 +199,7 @@ export function createAutomationTestRouter(pool: Pool): Router {
         body: JSON.stringify({
           from: `Deemona Finance OS <${process.env.FROM_EMAIL || 'onboarding@resend.dev'}>`,
           to: [adminEmail],
-          subject: '🚨 TEST: GST Filing Due in 5 Days — File GSTR-3B Now',
+          subject: 'ðŸš¨ TEST: GST Filing Due in 5 Days â€” File GSTR-3B Now',
           html: `<div style="font-family:Arial;padding:20px;background:#FEF2F2;border-left:4px solid #DC2626">
             <h2 style="color:#DC2626">[TEST] GSTR-3B Due in 5 Days</h2>
             <p>This is a test of the GST filing reminder automation.</p>
@@ -216,7 +216,7 @@ export function createAutomationTestRouter(pool: Pool): Router {
     } catch (e) { res.json({ error: String(e) }); }
   });
 
-  // ── POST /api/automation/test/payroll-reminder ────────────
+  // â”€â”€ POST /api/automation/test/payroll-reminder â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   router.post('/test/payroll-reminder', requireAuth, async (req: Request, res: Response) => {
     try {
       const adminEmail = process.env.ADMIN_EMAIL || 'admin@deemona.com';
@@ -227,7 +227,7 @@ export function createAutomationTestRouter(pool: Pool): Router {
         body: JSON.stringify({
           from: `Deemona Finance OS <${process.env.FROM_EMAIL || 'onboarding@resend.dev'}>`,
           to: [adminEmail],
-          subject: '💰 TEST: Payroll Processing Reminder',
+          subject: 'ðŸ’° TEST: Payroll Processing Reminder',
           html: `<div style="font-family:Arial;padding:20px;background:#EEF3FD;border-left:4px solid #1B4FD8">
             <h2 style="color:#1B4FD8">[TEST] Payroll Due</h2>
             <p>This is a test of the payroll reminder automation.</p>
@@ -245,12 +245,12 @@ export function createAutomationTestRouter(pool: Pool): Router {
     } catch (e) { res.json({ error: String(e) }); }
   });
 
-  // ── POST /api/automation/test/whatsapp-approval ───────────
+  // â”€â”€ POST /api/automation/test/whatsapp-approval â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   router.post('/test/whatsapp-approval', requireAuth, async (req: Request, res: Response) => {
     try {
       // Find a pending invoice to simulate approval
       const inv = await pool.query(
-        `SELECT invoice_id as id, invoice_number FROM generated_invoices WHERE status='pending' LIMIT 1`,
+        `SELECT id, invoice_number FROM ap_invoices WHERE status='pending' LIMIT 1`,
         [tid(req)]
       );
       if (!inv.rows.length) {
