@@ -56,7 +56,7 @@ export function createAutomationTestRouter(pool: Pool): Router {
       );
       if (!result.rows.length) return res.json({ error: 'No vendors found. Add a vendor first.' }) as any;
       const invoice = result.rows[0];
-      await handleInvoiceAutoApproval(pool, tid(req), invoice.id).catch(e => console.log('Auto-approval attempted:', e.message));
+      await handleInvoiceAutoApproval(pool, tid(req), invoice.id).catch(e => console.log('Auto-approval attempted:', e.message)).catch(e => console.log('Auto-approval attempted:', e.message));
       // Check if auto-approved
       const check = await pool.query(`SELECT status FROM ap_invoices WHERE id=$1`, [invoice.id]);
       const approved = check.rows[0]?.status === 'approved';
