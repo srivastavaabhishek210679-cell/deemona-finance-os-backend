@@ -120,7 +120,7 @@ export function createDashboardRouter(pool: Pool): Router {
       const topCustomers = await pool.query(`
         SELECT c.name as customer_name, COALESCE(SUM(ar.total_amount),0) as total, COUNT(ar.id) as invoice_count
         FROM ar_invoices ar LEFT JOIN customers c ON ar.customer_id=c.id
-        WHERE ar.tenant_id=$1 GROUP BY c.name ORDER BY total DESC LIMIT 5`, [t]).catch(() => ({ rows: [] }));
+        WHERE ar.tenant_id=$1 AND ar.status NOT IN ('paid','cancelled') GROUP BY c.name ORDER BY total DESC LIMIT 5`, [t]).catch(() => ({ rows: [] }));
 
       // Top vendors
       const topVendors = await pool.query(`
@@ -144,7 +144,7 @@ export function createDashboardRouter(pool: Pool): Router {
         SELECT ar.invoice_number, c.name as customer_name, ar.total_amount, ar.due_date, ar.status,
           GREATEST(0, EXTRACT(DAY FROM (CURRENT_DATE - ar.due_date))) as days_overdue
         FROM ar_invoices ar LEFT JOIN customers c ON ar.customer_id=c.id
-        WHERE ar.tenant_id=$1 ORDER BY ar.created_at DESC LIMIT 15`, [t]).catch(() => ({ rows: [] }));
+        WHERE ar.tenant_id=$1 AND ar.status NOT IN ('cancelled') ORDER BY ar.created_at DESC LIMIT 15`, [t]).catch(() => ({ rows: [] }));
 
       // Recent AP invoices
       const recentAP = await pool.query(`
