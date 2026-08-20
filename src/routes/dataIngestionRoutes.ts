@@ -20,10 +20,15 @@ export function createDataIngestionRouter(pool: Pool): Router {
 
   // â”€â”€ Helper: parse CSV string â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   function parseCSV(text: string): { headers: string[], rows: Record<string, string>[] } {
-    const lines = text.trim().split('\n').filter(l => l.trim());
+    const lines = text.trim().split(/\r?\n/).filter(l => l.trim());
     if (!lines.length) return { headers: [], rows: [] };
     
+    // Auto-detect delimiter
+    const firstLine = lines[0];
+    const delimiter = (firstLine.split('\t').length > firstLine.split(',').length) ? '\t' : ',';
+    
     const parseRow = (line: string): string[] => {
+      if (delimiter === '\t') return line.split('\t').map(v => v.trim());
       const result: string[] = [];
       let current = '';
       let inQuotes = false;
