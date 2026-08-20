@@ -11,6 +11,7 @@ import { Router, Request, Response } from 'express';
 import { Pool } from 'pg';
 import { requireAuth } from '../middleware/auth';
 import Anthropic from '@anthropic-ai/sdk';
+import { broadcastToTenant } from './eventBusRoutes';
 import * as XLSX from 'xlsx';
 import { XMLParser } from 'fast-xml-parser';
 
