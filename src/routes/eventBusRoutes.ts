@@ -11,6 +11,7 @@ import { Pool } from 'pg';
 import { requireAuth } from '../middleware/auth';
 import Anthropic from '@anthropic-ai/sdk';
 import { Resend } from 'resend';
+import { REPORT_REGISTRY, reportOverdueAlert, reportCreditBreach, reportImportSummary } from './reportEngine';
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const resend = new Resend(process.env.RESEND_API_KEY);
