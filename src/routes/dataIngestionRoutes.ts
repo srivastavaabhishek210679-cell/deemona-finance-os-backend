@@ -155,6 +155,18 @@ Respond with only the label, nothing else.`
     return mapping;
   }
 
+
+  async function parseGoogleSheet(urlOrId: string): Promise<{ headers: string[], rows: Record<string, string>[] }> {
+    const idMatch = urlOrId.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+    const sheetId = idMatch ? idMatch[1] : urlOrId.trim();
+    const csvUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv`;
+    const response = await fetch(csvUrl);
+    if (!response.ok) throw new Error(`Sheet fetch failed: ${response.status}`);
+    const text = await response.text();
+    if (text.includes("Sign in") || text.includes("accounts.google")) throw new Error("Sheet is private. Set sharing to Anyone with link - Viewer.");
+    return parseCSV(text);
+  }
+
   // â”€â”€ Helper: process and insert rows â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   async function processRows(
     pool: Pool, tenantId: string, dataType: string,
