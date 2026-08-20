@@ -170,7 +170,8 @@ Respond with only the label, nothing else.`
     const typeMap = fieldMaps[dataType] || {};
 
     for (const [targetField, aliases] of Object.entries(typeMap)) {
-      const matched = headers.find(h => aliases.some(a => h === a || h.includes(a) || a.includes(h)));
+      // Exact match first, then partial
+      const matched = headers.find(h => aliases.some(a => h === a)) || headers.find(h => aliases.some(a => h.includes(a) && !['date'].includes(h)));
       if (matched) mapping[targetField] = matched;
     }
     return mapping;
