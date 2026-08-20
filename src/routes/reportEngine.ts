@@ -280,7 +280,7 @@ export async function reportMonthlyFinancial(pool: Pool, tenantId: string): Prom
 // ── 8. BUDGET VS ACTUAL ───────────────────────────────────────
 export async function reportBudgetVsActual(pool: Pool, tenantId: string): Promise<{subject:string,html:string}> {
   const [budgets, totalAR, totalExp] = await Promise.all([
-    pool.query(`SELECT b.name, b.amount as budgeted, COALESCE(SUM(bt.annual_total),0) as spent FROM budgets b LEFT JOIN budget_transactions bt ON bt.budget_id=b.id WHERE b.tenant_id=$1 GROUP BY b.id,b.name,b.amount ORDER BY b.amount DESC`,[tenantId]),
+    pool.query(`SELECT b.name, b.amount as budgeted, COALESCE(SUM(bt.annual_total),0) as spent FROM budgets b LEFT JOIN budget_lines bt ON bt.budget_id=b.id WHERE b.tenant_id=$1 GROUP BY b.id,b.name,b.amount ORDER BY b.amount DESC`,[tenantId]),
     pool.query(`SELECT COALESCE(SUM(total_amount),0) as v FROM ar_invoices WHERE tenant_id=$1`,[tenantId]),
     pool.query(`SELECT COALESCE(SUM(total_amount),0) as v FROM expense_claims WHERE tenant_id=$1`,[tenantId]),
   ]);
