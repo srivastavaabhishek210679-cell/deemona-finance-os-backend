@@ -50,23 +50,26 @@ function getTransport() {
     host: 'smtp.gmail.com',
     port: 465,
     secure: true,
-    family: 4, // Force IPv4
+    family: 4,
     auth: {
       user: process.env.EMAIL_FROM || process.env.FROM_EMAIL,
       pass: process.env.EMAIL_PASSWORD,
     },
-  });
+  } as any);
+}
+
+async function sendEmail(to: string, subject: string, html: string): Promise<boolean> {
   try {
     const transport = getTransport();
     await transport.sendMail({
-    from: `"Deemona Finance OS" <${process.env.EMAIL_FROM || process.env.FROM_EMAIL}>` ,
+      from: `"Deemona Finance OS" <${process.env.GMAIL_USER || process.env.FROM_EMAIL}>`,
       to, subject, html,
     });
     console.log(`[Email] Sent to ${to}: ${subject}`);
     return true;
   } catch (e) {
     console.error('[Email] Failed:', e);
-    throw e; // re-throw so caller gets real error
+    return false;
   }
 }
 
