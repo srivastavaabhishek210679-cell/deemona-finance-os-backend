@@ -6,14 +6,14 @@ export function createDashboardRouter(pool: Pool): Router {
   const router = Router();
   const tid = (req: Request): string => (req as any).user?.tenantId;
 
-  // â”€â”€ Master KPI endpoint â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ── Master KPI endpoint ───────────────────────────────────
   router.get('/kpis', requireAuth, async (req: Request, res: Response) => {
     try {
       const t = tid(req);
       const [ar, ap, exp, inv, emp, vend, cust, budg, assets, comp] = await Promise.all([
         pool.query(`SELECT
           COALESCE(SUM(total_amount),0) as total_ar,
-          COALESCE(SUM(CASE WHEN status NOT IN ('paid','cancelled') THEN total_amount ELSE 0 END),0) as outstanding_ar,
+          COALESCE(SUM(CASE WHEN status IN ('sent','overdue') THEN total_amount ELSE 0 END),0) as outstanding_ar,
           COALESCE(SUM(CASE WHEN due_date < CURRENT_DATE AND status NOT IN ('paid','cancelled') THEN total_amount ELSE 0 END),0) as overdue_ar,
           COUNT(*) as total_count,
           COUNT(CASE WHEN due_date < CURRENT_DATE AND status NOT IN ('paid','cancelled') THEN 1 END) as overdue_count,
