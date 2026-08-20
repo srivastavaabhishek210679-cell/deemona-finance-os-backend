@@ -66,7 +66,7 @@ async function sendEmail(to: string, subject: string, html: string): Promise<boo
     return true;
   } catch (e) {
     console.error('[Email] Failed:', e);
-    return false;
+    throw e; // re-throw so caller gets real error
   }
 }
 
@@ -423,7 +423,7 @@ export function createEventBusRouter(pool: Pool): Router {
         ).catch(() => {});
         res.json({ success: true, message: `Report sent to ${email}` });
       } else {
-        res.status(500).json({ error: 'Failed to send email. Check Gmail credentials in environment.' });
+        res.status(500).json({ error: 'Email failed: ' + String(e) });
       }
     } catch (e) {
       res.status(500).json({ error: String(e) });
