@@ -10,7 +10,7 @@ import { Router, Request, Response } from 'express';
 import { Pool } from 'pg';
 import { requireAuth } from '../middleware/auth';
 import Anthropic from '@anthropic-ai/sdk';
-import * as nodemailer from 'nodemailer';
+import { Resend } from 'resend';
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -45,27 +45,19 @@ function broadcastToTenant(tenantId: string, event: string, data: any) {
 }
 
 // ── Email Transport ───────────────────────────────────────────
-function getTransport() {
-  return nodemailer.createTransport({
-    host: 'smtp.gmail.com',
-    port: 465,
-    secure: true,
-    family: 4,
-    auth: {
-      user: process.env.EMAIL_FROM || process.env.FROM_EMAIL,
-      pass: process.env.EMAIL_PASSWORD,
-    },
-  } as any);
-}
-
 async function sendEmail(to: string, subject: string, html: string): Promise<boolean> {
   try {
-    const transport = getTransport();
-    await transport.sendMail({
-      from: `"Deemona Finance OS" <${process.env.GMAIL_USER || process.env.FROM_EMAIL}>`,
-      to, subject, html,
+    const { error } = await resend.emails.send({
+      from: 'Deemona Finance OS <onboarding@resend.dev>',
+      to,
+      subject,
+      html,
     });
-    console.log(`[Email] Sent to ${to}: ${subject}`);
+    if (error) {
+      console.error('[Email] Resend error:', JSON.stringify(error));
+      return false;
+    }
+    console.log('[Email] Sent to ' + to + ': ' + subject);
     return true;
   } catch (e) {
     console.error('[Email] Failed:', e);
