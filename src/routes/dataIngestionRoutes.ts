@@ -207,10 +207,10 @@ Respond with only the label, nothing else.`
             }
 
             await pool.query(
-              `INSERT INTO ar_invoices (tenant_id, invoice_number, customer_id, date, due_date, total_amount, status, notes)
-               VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+              `INSERT INTO ar_invoices (tenant_id, invoice_number, customer_id, date, due_date, total_amount, tax_amount, status, notes)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
                ON CONFLICT (tenant_id, invoice_number) DO UPDATE SET
-               total_amount=EXCLUDED.total_amount, status=EXCLUDED.status, updated_at=NOW()`,
+               total_amount=EXCLUDED.total_amount, tax_amount=EXCLUDED.tax_amount, status=EXCLUDED.status, updated_at=NOW()`,
               [tenantId, invNum, custId, date, dueDate, amount, parseFloat(get(row, 'tax_amount')||'0'), status.toLowerCase(), get(row, 'description')]
             );
             inserted++;
