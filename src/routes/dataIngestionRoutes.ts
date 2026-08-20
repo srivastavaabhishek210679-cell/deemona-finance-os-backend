@@ -457,7 +457,7 @@ Respond with only the label, nothing else.`
       const dataType = forcedType || await detectDataType(headers, rows);
 
       // Map fields
-      const fieldMap = fieldMapping || await mapFields(dataType, headers);
+      const fieldMap = fieldMapping || await mapFields(dataType, headers, rows.slice(0,3));
 
       // Process and insert
       const result = await processRows(pool, tenantId, dataType, rows, fieldMap);
@@ -513,7 +513,7 @@ Respond with only the label, nothing else.`
       }
 
       const dataType = await detectDataType(headers, rows);
-      const fieldMap = await mapFields(dataType, headers);
+      const fieldMap = await mapFields(dataType, headers, rows.slice(0,3));
 
       res.json({
         dataType,
