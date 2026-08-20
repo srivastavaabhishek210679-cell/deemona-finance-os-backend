@@ -423,7 +423,7 @@ export function createEventBusRouter(pool: Pool): Router {
         ).catch(() => {});
         res.json({ success: true, message: `Report sent to ${email}` });
       } else {
-        res.status(500).json({ error: 'Email failed: ' + String(e) });
+        res.status(500).json({ error: 'Failed to send email. Check Gmail credentials in environment.' });
       }
     } catch (e) {
       res.status(500).json({ error: String(e) });
