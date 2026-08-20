@@ -190,7 +190,7 @@ Respond with only the label, nothing else.`
           case 'SALES_INVOICES': {
             const invNum = get(row, 'invoice_number') || 'AR-' + Date.now();
             const custName = get(row, 'customer_name');
-            const amount = parseAmt(get(row, 'total_amount'));
+            const amount = parseAmt(get(row, 'total_amount')) || parseAmt(get(row, 'net_value')) || parseAmt(get(row, 'gross'));
             const date = parseDate(get(row, 'date')) || new Date().toISOString().split('T')[0];
             const dueDate = parseDate(get(row, 'due_date')) || new Date(Date.now()+30*86400000).toISOString().split('T')[0];
             const status = get(row, 'status') || 'sent';
@@ -211,7 +211,7 @@ Respond with only the label, nothing else.`
                VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
                ON CONFLICT (tenant_id, invoice_number) DO UPDATE SET
                total_amount=EXCLUDED.total_amount, status=EXCLUDED.status, updated_at=NOW()`,
-              [tenantId, invNum, custId, date, dueDate, amount, status.toLowerCase(), get(row, 'description')]
+              [tenantId, invNum, custId, date, dueDate, amount, parseFloat(get(row, 'tax_amount')||'0'), status.toLowerCase(), get(row, 'description')]
             );
             inserted++;
             break;
