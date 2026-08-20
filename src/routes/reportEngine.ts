@@ -248,8 +248,8 @@ export async function reportMonthlyFinancial(pool: Pool, tenantId: string): Prom
     pool.query(`SELECT COALESCE(SUM(total_amount),0) as total, COALESCE(SUM(CASE WHEN status='paid' THEN total_amount ELSE 0 END),0) as paid, COALESCE(SUM(CASE WHEN status NOT IN ('paid','cancelled') THEN total_amount ELSE 0 END),0) as outstanding FROM ar_invoices WHERE tenant_id=$1 AND created_at>DATE_TRUNC('month',NOW())`,[tenantId]),
     pool.query(`SELECT COALESCE(SUM(total_amount),0) as total, COALESCE(SUM(CASE WHEN status='paid' THEN total_amount ELSE 0 END),0) as paid FROM ap_invoices WHERE tenant_id=$1 AND created_at>DATE_TRUNC('month',NOW())`,[tenantId]),
     pool.query(`SELECT COALESCE(SUM(total_amount),0) as total, COUNT(*) as count FROM expense_claims WHERE tenant_id=$1 AND created_at>DATE_TRUNC('month',NOW())`,[tenantId]),
-    pool.query(`SELECT COUNT(*) as items, COALESCE(SUM(quantity*unit_cost),0) as value, COUNT(CASE WHEN quantity<=reorder_level THEN 1 END) as alerts FROM inventory_items WHERE tenant_id=$1`,[tenantId]),
-    pool.query(`SELECT COUNT(*) as total, COALESCE(SUM(salary),0) as payroll FROM employees WHERE tenant_id=$1 AND status='active'`,[tenantId]),
+    pool.query(`SELECT COUNT(*) as items, COALESCE(SUM(quantity*unit_cost),0) as value, COUNT(CASE WHEN current_stock<=reorder_qty THEN 1 END) as alerts FROM inventory_items WHERE tenant_id=$1`,[tenantId]),
+    pool.query(`SELECT COUNT(*) as total, COALESCE(SUM(basic_salary),0) as payroll FROM employees WHERE tenant_id=$1 AND status='active'`,[tenantId]),
     pool.query(`SELECT COUNT(*) as total, COUNT(CASE WHEN status NOT IN ('Completed','Closed') AND due_date<CURRENT_DATE THEN 1 END) as overdue FROM compliance_items WHERE tenant_id=$1`,[tenantId]),
   ]);
   const rev=parseFloat(ar.rows[0]?.total||0), apTotal=parseFloat(ap.rows[0]?.total||0)*0.3+parseFloat(exp.rows[0]?.total||0);
@@ -280,7 +280,7 @@ export async function reportMonthlyFinancial(pool: Pool, tenantId: string): Prom
 // ── 8. BUDGET VS ACTUAL ───────────────────────────────────────
 export async function reportBudgetVsActual(pool: Pool, tenantId: string): Promise<{subject:string,html:string}> {
   const [budgets, totalAR, totalExp] = await Promise.all([
-    pool.query(`SELECT b.name, b.amount as budgeted, COALESCE(SUM(bt.amount),0) as spent FROM budgets b LEFT JOIN budget_transactions bt ON bt.budget_id=b.id WHERE b.tenant_id=$1 GROUP BY b.id,b.name,b.amount ORDER BY b.amount DESC`,[tenantId]),
+    pool.query(`SELECT b.name, b.amount as budgeted, COALESCE(SUM(bt.annual_total),0) as spent FROM budgets b LEFT JOIN budget_transactions bt ON bt.budget_id=b.id WHERE b.tenant_id=$1 GROUP BY b.id,b.name,b.amount ORDER BY b.amount DESC`,[tenantId]),
     pool.query(`SELECT COALESCE(SUM(total_amount),0) as v FROM ar_invoices WHERE tenant_id=$1`,[tenantId]),
     pool.query(`SELECT COALESCE(SUM(total_amount),0) as v FROM expense_claims WHERE tenant_id=$1`,[tenantId]),
   ]);
@@ -326,8 +326,8 @@ export async function reportGSTSummary(pool: Pool, tenantId: string): Promise<{s
 // ── 10. INVENTORY & STOCK REPORT ─────────────────────────────
 export async function reportInventory(pool: Pool, tenantId: string): Promise<{subject:string,html:string}> {
   const [summary, reorder, categories] = await Promise.all([
-    pool.query(`SELECT COUNT(*) as items, COALESCE(SUM(quantity*unit_cost),0) as total_value, COALESCE(AVG(unit_cost),0) as avg_cost, COUNT(CASE WHEN quantity<=reorder_level THEN 1 END) as reorder_alerts, COUNT(CASE WHEN quantity=0 THEN 1 END) as out_of_stock FROM inventory_items WHERE tenant_id=$1`,[tenantId]),
-    pool.query(`SELECT name, sku, quantity, reorder_level, unit_cost, quantity*unit_cost as value FROM inventory_items WHERE tenant_id=$1 AND quantity<=reorder_level ORDER BY quantity ASC LIMIT 10`,[tenantId]),
+    pool.query(`SELECT COUNT(*) as items, COALESCE(SUM(quantity*unit_cost),0) as total_value, COALESCE(AVG(unit_cost),0) as avg_cost, COUNT(CASE WHEN current_stock<=reorder_qty THEN 1 END) as reorder_alerts, COUNT(CASE WHEN current_stock=0 THEN 1 END) as out_of_stock FROM inventory_items WHERE tenant_id=$1`,[tenantId]),
+    pool.query(`SELECT name, sku, current_stock, reorder_qty, unit_cost, quantity*unit_cost as value FROM inventory_items WHERE tenant_id=$1 AND current_stock<=reorder_qty ORDER BY current_stock ASC LIMIT 10`,[tenantId]),
     pool.query(`SELECT category, COUNT(*) as items, COALESCE(SUM(quantity*unit_cost),0) as value FROM inventory_items WHERE tenant_id=$1 GROUP BY category ORDER BY value DESC`,[tenantId]),
   ]);
   const s=summary.rows[0]||{};
