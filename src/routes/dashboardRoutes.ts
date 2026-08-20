@@ -142,7 +142,7 @@ export function createDashboardRouter(pool: Pool): Router {
       // Recent AR invoices
       const recentAR = await pool.query(`
         SELECT ar.invoice_number, c.name as customer_name, ar.total_amount, ar.due_date, ar.status,
-          GREATEST(0, EXTRACT(DAY FROM (CURRENT_DATE - ar.due_date))) as days_overdue
+          CASE WHEN ar.due_date < CURRENT_DATE AND ar.status NOT IN ('paid','cancelled') THEN (CURRENT_DATE - ar.due_date) ELSE 0 END as days_overdue
         FROM ar_invoices ar LEFT JOIN customers c ON ar.customer_id=c.id
         WHERE ar.tenant_id=$1 AND ar.status NOT IN ('cancelled') ORDER BY ar.created_at DESC LIMIT 15`, [t]).catch(() => ({ rows: [] }));
 
