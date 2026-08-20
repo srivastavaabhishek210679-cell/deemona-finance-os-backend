@@ -49,8 +49,8 @@ function getTransport() {
   return nodemailer.createTransport({
     service: 'gmail',
     auth: {
-      user: process.env.GMAIL_USER || process.env.FROM_EMAIL,
-      pass: process.env.GMAIL_APP_PASSWORD || process.env.GMAIL_PASS,
+    user: process.env.EMAIL_FROM || process.env.FROM_EMAIL,
+    pass: process.env.EMAIL_PASSWORD,
     },
   });
 }
@@ -59,7 +59,7 @@ async function sendEmail(to: string, subject: string, html: string): Promise<boo
   try {
     const transport = getTransport();
     await transport.sendMail({
-      from: `"Deemona Finance OS" <${process.env.EMAIL_FROM || process.env.GMAIL_USER}>}`,
+    from: `"Deemona Finance OS" <${process.env.EMAIL_FROM || process.env.FROM_EMAIL}>` ,
       to, subject, html,
     });
     console.log(`[Email] Sent to ${to}: ${subject}`);
