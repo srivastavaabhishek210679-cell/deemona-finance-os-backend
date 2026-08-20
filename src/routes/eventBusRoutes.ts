@@ -403,7 +403,7 @@ export function createEventBusRouter(pool: Pool): Router {
       const result = await registry.fn(pool, tenantId, threshold || 100000);
       const sent = await sendEmail(email, result.subject, result.html);
       if (sent) {
-        await pool.query(INSERT INTO automation_logs (tenant_id, automation_type, status, detail, created_at) VALUES (\, 'SCHEDULED_REPORT', 'success', \, NOW()), [tenantId, result.subject + ' to ' + email]).catch(() => {});
+        await pool.query('INSERT INTO automation_logs (tenant_id, automation_type, status, detail, created_at) VALUES ($1, 'SCHEDULED_REPORT', 'success', $2, NOW())', [tenantId, result.subject + ' to ' + email]).catch(() => {});
         res.json({ success: true, message: registry.label + ' sent to ' + email });
       } else {
         res.status(500).json({ error: 'Failed to send email. Check RESEND_API_KEY in Render environment.' });
