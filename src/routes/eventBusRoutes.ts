@@ -395,33 +395,18 @@ export function createEventBusRouter(pool: Pool): Router {
   router.post('/send-report', requireAuth, async (req: Request, res: Response) => {
     try {
       const tenantId = tid(req);
-      const { reportType, email } = req.body;
-
+      const { reportType, email, threshold } = req.body;
       if (!email) return res.status(400).json({ error: 'Email required' }) as any;
-
-      let html = '';
-      let subject = '';
-
-      if (reportType === 'ar_aging') {
-        html = await generateARAgingReport(pool, tenantId);
-        subject = `📊 AR Aging Report — ${new Date().toLocaleDateString('en-IN')} — Deemona Finance OS`;
-      } else if (reportType === 'weekly_pl') {
-        html = await generateWeeklyPLReport(pool, tenantId);
-        subject = `📈 Weekly P&L Report — Deemona Finance OS`;
-      } else {
-        return res.status(400).json({ error: 'Invalid report type' }) as any;
-      }
-
-      const sent = await sendEmail(email, subject, html);
+      const { REPORT_REGISTRY } = await import('./reportEngine');
+      const registry = REPORT_REGISTRY[reportType];
+      if (!registry) return res.status(400).json({ error: 'Unknown report: ' + reportType }) as any;
+      const result = await registry.fn(pool, tenantId, threshold || 100000);
+      const sent = await sendEmail(email, result.subject, result.html);
       if (sent) {
-        await pool.query(
-          `INSERT INTO automation_logs (tenant_id, automation_type, status, detail, created_at)
-           VALUES ($1, 'SCHEDULED_REPORT', 'success', $2, NOW())`,
-          [tenantId, `${reportType} sent to ${email}`]
-        ).catch(() => {});
-        res.json({ success: true, message: `Report sent to ${email}` });
+        await pool.query(INSERT INTO automation_logs (tenant_id, automation_type, status, detail, created_at) VALUES (\, 'SCHEDULED_REPORT', 'success', \, NOW()), [tenantId, result.subject + ' to ' + email]).catch(() => {});
+        res.json({ success: true, message: registry.label + ' sent to ' + email });
       } else {
-        res.status(500).json({ error: 'Failed to send email. Check Gmail credentials in environment.' });
+        res.status(500).json({ error: 'Failed to send email. Check RESEND_API_KEY in Render environment.' });
       }
     } catch (e) {
       res.status(500).json({ error: String(e) });
