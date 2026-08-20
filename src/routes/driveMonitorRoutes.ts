@@ -60,8 +60,8 @@ async function listNewFiles(folderId: string, apiKey: string, since?: string): P
       const err = await resp.text();
       throw new Error(`Drive API error ${resp.status}: ${err}`);
     }
-    const data = await resp.json();
-    return data.files || [];
+    const data = await resp.json() as any;
+    return (data.files || []) as DriveFile[];
   } catch (e) {
     console.error('[DriveMonitor] List files error:', e);
     return [];
@@ -256,7 +256,7 @@ async function processFile(pool: Pool, tenantId: string, file: DriveFile, apiKey
 
     let importResult = { inserted: 0, updated: 0, errors: 0, dataType: 'UNKNOWN' };
     try {
-      const ingestData = await ingestResp.json();
+      const ingestData = await ingestResp.json() as any;
       importResult = {
         inserted: ingestData.inserted || 0,
         updated: ingestData.updated || 0,
