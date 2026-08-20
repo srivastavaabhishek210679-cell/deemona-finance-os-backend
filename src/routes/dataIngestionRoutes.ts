@@ -429,6 +429,7 @@ Respond with only the label, nothing else.`
         }
       }
 
+      if (format === 'gsheet' && !rows.length) { const gs = await parseGoogleSheet(data.trim()); headers = gs.headers; rows = gs.rows; }
       if (!rows.length) return res.status(400).json({ error: 'No data rows found' }) as any;
 
       // Detect data type
@@ -490,6 +491,7 @@ Respond with only the label, nothing else.`
         }
       }
 
+      if (format === 'gsheet') { const gs = await parseGoogleSheet(data.trim()); headers = gs.headers; rows = gs.rows; }
       const dataType = await detectDataType(headers, rows);
       const fieldMap = await mapFields(dataType, headers, rows.slice(0,3));
 
