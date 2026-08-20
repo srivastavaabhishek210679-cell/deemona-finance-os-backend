@@ -13,6 +13,8 @@ import Anthropic from '@anthropic-ai/sdk';
 import { Resend } from 'resend';
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+const resend = new Resend(process.env.RESEND_API_KEY);
+
 
 // ── SSE Client Registry ───────────────────────────────────────
 interface SSEClient {
