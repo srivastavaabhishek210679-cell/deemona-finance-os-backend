@@ -59,7 +59,7 @@ async function sendEmail(to: string, subject: string, html: string): Promise<boo
   try {
     const transport = getTransport();
     await transport.sendMail({
-      from: `"Deemona Finance OS" <${process.env.GMAIL_USER || process.env.FROM_EMAIL}>`,
+      from: `"Deemona Finance OS" <${process.env.EMAIL_FROM || process.env.GMAIL_USER}>}`,
       to, subject, html,
     });
     console.log(`[Email] Sent to ${to}: ${subject}`);
