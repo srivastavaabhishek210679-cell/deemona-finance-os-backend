@@ -47,15 +47,15 @@ function broadcastToTenant(tenantId: string, event: string, data: any) {
 // ── Email Transport ───────────────────────────────────────────
 function getTransport() {
   return nodemailer.createTransport({
-    service: 'gmail',
+    host: 'smtp.gmail.com',
+    port: 465,
+    secure: true,
+    family: 4, // Force IPv4
     auth: {
-    user: process.env.EMAIL_FROM || process.env.FROM_EMAIL,
-    pass: process.env.EMAIL_PASSWORD,
+      user: process.env.EMAIL_FROM || process.env.FROM_EMAIL,
+      pass: process.env.EMAIL_PASSWORD,
     },
   });
-}
-
-async function sendEmail(to: string, subject: string, html: string): Promise<boolean> {
   try {
     const transport = getTransport();
     await transport.sendMail({
