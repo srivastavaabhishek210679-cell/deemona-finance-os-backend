@@ -1,5 +1,5 @@
-// ============================================================
-// Deemona AI Finance OS — Unified Data Ingestion Engine
+﻿// ============================================================
+// Deemona AI Finance OS â€” Unified Data Ingestion Engine
 // File: src/routes/dataIngestionRoutes.ts
 // Single entry point for all data imports
 // Supports: CSV, Excel, JSON, Manual entry
@@ -18,7 +18,7 @@ export function createDataIngestionRouter(pool: Pool): Router {
   const router = Router();
   const tid = (req: Request): string => (req as any).user?.tenantId;
 
-  // ── Helper: parse CSV string ──────────────────────────────
+  // â”€â”€ Helper: parse CSV string â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   function parseCSV(text: string): { headers: string[], rows: Record<string, string>[] } {
     const lines = text.trim().split('\n').filter(l => l.trim());
     if (!lines.length) return { headers: [], rows: [] };
@@ -46,7 +46,7 @@ export function createDataIngestionRouter(pool: Pool): Router {
     return { headers, rows };
   }
 
-  // ── Helper: detect data type via AI ──────────────────────
+  // â”€â”€ Helper: detect data type via AI â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   async function detectDataType(headers: string[], sampleRows: Record<string, string>[]): Promise<string> {
     const sample = JSON.stringify({ headers, sample: sampleRows.slice(0, 3) });
     try {
@@ -80,7 +80,7 @@ Respond with only the label, nothing else.`
     }
   }
 
-  // ── Helper: AI field mapping ──────────────────────────────
+  // â”€â”€ Helper: AI field mapping â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   async function mapFields(dataType: string, headers: string[]): Promise<Record<string, string>> {
     const fieldMaps: Record<string, Record<string, string[]>> = {
       SALES_INVOICES: {
@@ -171,7 +171,7 @@ Respond with only the label, nothing else.`
     return mapping;
   }
 
-  // ── Helper: process and insert rows ──────────────────────
+  // â”€â”€ Helper: process and insert rows â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   async function processRows(
     pool: Pool, tenantId: string, dataType: string,
     rows: Record<string, string>[], fieldMap: Record<string, string>
@@ -184,7 +184,7 @@ Respond with only the label, nothing else.`
 
     const parseAmt = (v: string): number => {
       if (!v) return 0;
-      return parseFloat(v.replace(/[₹$,\s]/g, '').replace(/[()]/g, m => m === '(' ? '-' : '')) || 0;
+      return parseFloat(v.replace(/[â‚¹$,\s]/g, '').replace(/[()]/g, m => m === '(' ? '-' : '')) || 0;
     };
 
     const parseDate = (v: string): string | null => {
@@ -415,7 +415,7 @@ Respond with only the label, nothing else.`
     return { inserted, updated, errors };
   }
 
-  // ── POST /api/ingest — Main ingestion endpoint ────────────
+  // â”€â”€ POST /api/ingest â€” Main ingestion endpoint â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   router.post('/', requireAuth, async (req: Request, res: Response) => {
     try {
       const tenantId = tid(req);
@@ -481,7 +481,7 @@ Respond with only the label, nothing else.`
     }
   });
 
-  // ── GET /api/ingest/preview — Preview before import ───────
+  // â”€â”€ GET /api/ingest/preview â€” Preview before import â”€â”€â”€â”€â”€â”€â”€
   router.post('/preview', requireAuth, async (req: Request, res: Response) => {
     try {
       const { data, format = 'csv' } = req.body;
@@ -513,7 +513,7 @@ Respond with only the label, nothing else.`
         dataType,
         headers,
         totalRows: rows.length,
-        sampleRows: rows.slice(0, 5),
+        sampleRows: rows.slice(0, 5).map(r => { const out: any = {}; headers.forEach((h,i) => { out[h] = Object.values(r)[i] || ''; }); return out; }),
         fieldMapping: fieldMap,
         detectedColumns: Object.keys(fieldMap).length,
         unmappedColumns: headers.filter(h => !Object.values(fieldMap).includes(h)),
@@ -524,7 +524,7 @@ Respond with only the label, nothing else.`
     }
   });
 
-  // ── GET /api/ingest/history ───────────────────────────────
+  // â”€â”€ GET /api/ingest/history â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   router.get('/history', requireAuth, async (req: Request, res: Response) => {
     try {
       const result = await pool.query(
@@ -540,7 +540,7 @@ Respond with only the label, nothing else.`
     }
   });
 
-  // ── GET /api/ingest/templates — Download CSV templates ────
+  // â”€â”€ GET /api/ingest/templates â€” Download CSV templates â”€â”€â”€â”€
   router.get('/template/:type', requireAuth, async (req: Request, res: Response) => {
     const templates: Record<string, string> = {
       sales_invoices: 'invoice_number,customer_name,email,date,due_date,total_amount,tax_amount,status,description\nINV-001,Infosys Ltd,accounts@infosys.com,2024-04-01,2024-05-01,500000,90000,sent,IT Services Q1\nINV-002,TCS Mumbai,ap@tcs.com,2024-04-15,2024-05-15,350000,63000,paid,Consulting Services',
