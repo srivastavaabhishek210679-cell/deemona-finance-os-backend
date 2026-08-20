@@ -86,93 +86,69 @@ Respond with only the label, nothing else.`
   }
 
   // â”€â”€ Helper: AI field mapping â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-  async function mapFields(dataType: string, headers: string[]): Promise<Record<string, string>> {
-    const fieldMaps: Record<string, Record<string, string[]>> = {
-      SALES_INVOICES: {
-        invoice_number: ['invoice_number','invoice_no','inv_no','invoice','bill_no','order_no','ref_no'],
-        customer_name: ['customer_name','customer','client','buyer','customer_id','bill_to'],
-        total_amount: ['total_amount','amount','total','invoice_amount','bill_amount','value','grand_total'],
-        due_date: ['due_date','payment_due','due','expiry'],
-        date: ['date','invoice_date','bill_date','order_date','created_date'],
-        status: ['status','payment_status','state'],
-        description: ['description','notes','remarks','details','narration'],
-        tax_amount: ['tax','gst','tax_amount','gst_amount','vat'],
-      },
-      PURCHASE_INVOICES: {
-        invoice_number: ['invoice_number','invoice_no','bill_no','ref_no','vendor_invoice'],
-        vendor_name: ['vendor_name','vendor','supplier','seller'],
-        total_amount: ['total_amount','amount','total','bill_amount','value'],
-        date: ['date','invoice_date','bill_date'],
-        due_date: ['due_date','payment_due'],
-        status: ['status','payment_status'],
-      },
-      EXPENSES: {
-        title: ['title','description','expense_name','category','type','narration'],
-        employee_name: ['employee_name','employee','staff','name','submitted_by'],
-        total_amount: ['total_amount','amount','expense_amount','value','claim_amount'],
-        date: ['date','expense_date','claim_date','transaction_date'],
-        category: ['category','type','expense_type','classification'],
-        status: ['status','approval_status'],
-      },
-      INVENTORY: {
-        name: ['name','item_name','product_name','description','item'],
-        sku: ['sku','code','item_code','product_code','part_no'],
-        quantity: ['quantity','qty','stock','units','available'],
-        unit_cost: ['unit_cost','cost','price','unit_price','rate'],
-        category: ['category','type','group','classification'],
-        reorder_level: ['reorder_level','reorder_point','min_stock','minimum'],
-      },
-      PAYROLL: {
-        employee_name: ['employee_name','name','staff','employee'],
-        basic_salary: ['basic_salary','basic','salary','wages','gross_salary'],
-        hra: ['hra','house_rent','housing_allowance'],
-        other_allowances: ['other_allowances','allowances','special_allowance'],
-        pf_employee: ['pf_employee','pf','provident_fund','epf'],
-        tds: ['tds','tax','income_tax'],
-        net_pay: ['net_pay','net_salary','take_home','net'],
-        month: ['month','pay_month','payroll_month','period'],
-      },
-      CUSTOMERS: {
-        name: ['name','customer_name','company','client','business'],
-        email: ['email','email_address','mail'],
-        phone: ['phone','mobile','contact','phone_no'],
-        address: ['address','location','city'],
-        gstin: ['gstin','gst','gst_number','tax_id'],
-        credit_limit: ['credit_limit','limit','credit'],
-      },
-      VENDORS: {
-        name: ['name','vendor_name','company','supplier','business'],
-        email: ['email','email_address'],
-        phone: ['phone','mobile','contact'],
-        gstin: ['gstin','gst','gst_number'],
-        payment_terms: ['payment_terms','terms','days'],
-        pan: ['pan','pan_number'],
-      },
-      BANK_TRANSACTIONS: {
-        date: ['date','transaction_date','value_date','posting_date'],
-        description: ['description','narration','particulars','remarks'],
-        debit: ['debit','withdrawal','dr','amount_dr'],
-        credit: ['credit','deposit','cr','amount_cr'],
-        balance: ['balance','closing_balance','running_balance'],
-        reference: ['reference','ref_no','cheque_no','utr'],
-      },
-      ASSETS: {
-        name: ['name','asset_name','description','item'],
-        category: ['category','type','asset_type'],
-        purchase_date: ['purchase_date','date','acquisition_date'],
-        actual_cost: ['actual_cost','cost','purchase_price','value'],
-        useful_life_years: ['useful_life_years','useful_life','life','years'],
-        depreciation_method: ['depreciation_method','method','dep_method'],
-      },
+  async function mapFields(dataType: string, headers: string[], sampleRows: Record<string, string>[] = []): Promise<Record<string, string>> {
+    const dbSchemas: Record<string, string[]> = {
+      SALES_INVOICES: ['invoice_number','customer_name','date','due_date','total_amount','tax_amount','status','description','discount','currency','payment_terms','po_number'],
+      PURCHASE_INVOICES: ['invoice_number','vendor_name','date','due_date','total_amount','tax_amount','status','description','department','cost_center'],
+      EXPENSES: ['title','employee_name','category','date','total_amount','status','project','description','payment_method','approved_by'],
+      INVENTORY: ['name','sku','category','quantity','unit_cost','reorder_level','unit_of_measure','location','supplier','barcode','hsn_code'],
+      PAYROLL: ['employee_name','employee_id','department','designation','basic_salary','hra','other_allowances','pf_employee','tds','professional_tax','gross_salary','net_pay','month','bank_account','ifsc'],
+      CUSTOMERS: ['name','email','phone','address','city','state','gstin','pan','credit_limit','payment_terms','contact_person','industry'],
+      VENDORS: ['name','email','phone','address','city','state','gstin','pan','payment_terms','bank_account','ifsc','contact_person','category'],
+      BANK_TRANSACTIONS: ['date','description','debit','credit','balance','reference','transaction_type','narration'],
+      ASSETS: ['name','category','purchase_date','actual_cost','useful_life_years','depreciation_method','location','serial_number','manufacturer','warranty_expiry'],
     };
-
+    const commonAliases: Record<string, string[]> = {
+      invoice_number: ['invoice_no','inv_no','bill_no','ref_no','order_no','invoice#','bill#','doc_no'],
+      customer_name: ['customer','client','buyer','bill_to','sold_to','party_name','party','debtor'],
+      vendor_name: ['vendor','supplier','seller','party_name','party','creditor'],
+      total_amount: ['amount','total','grand_total','invoice_amount','bill_amount','net_amount','value','gross'],
+      due_date: ['due_date','payment_due','due_on','expiry','maturity_date','pay_by'],
+      date: ['invoice_date','bill_date','order_date','transaction_date','created_date','doc_date','posting_date'],
+      tax_amount: ['tax','gst','vat','tax_amount','gst_amount','igst','cgst','sgst','total_tax'],
+      basic_salary: ['basic','salary','gross_salary','ctc','wage','basic_pay'],
+      employee_name: ['employee','staff','name','emp_name','worker','emp_name'],
+      unit_cost: ['cost','price','unit_price','rate','mrp','selling_price','purchase_price'],
+      quantity: ['qty','stock','units','count','available_qty','on_hand'],
+      net_pay: ['net','take_home','net_salary','in_hand','disbursed'],
+      description: ['narration','remarks','notes','details','particulars','memo','comments'],
+    };
+    const targetFields = dbSchemas[dataType] || [];
     const mapping: Record<string, string> = {};
-    const typeMap = fieldMaps[dataType] || {};
-
-    for (const [targetField, aliases] of Object.entries(typeMap)) {
-      // Exact match first, then partial
-      const matched = headers.find(h => aliases.some(a => h === a)) || headers.find(h => aliases.some(a => h.includes(a) && !['date'].includes(h)));
-      if (matched) mapping[targetField] = matched;
+    const usedHeaders = new Set<string>();
+    for (const target of targetFields) {
+      const aliases = commonAliases[target] || [];
+      const allAliases = [target, ...aliases];
+      const match =
+        headers.find(h => h === target) ||
+        headers.find(h => aliases.includes(h)) ||
+        headers.find(h => h.replace(/_/g,'') === target.replace(/_/g,'')) ||
+        headers.find(h => allAliases.some(a => h.includes(a) || a.includes(h)));
+      if (match && !usedHeaders.has(match)) {
+        mapping[target] = match;
+        usedHeaders.add(match);
+      }
+    }
+    const unmapped = headers.filter(h => !usedHeaders.has(h));
+    if (unmapped.length > 0 && sampleRows.length > 0) {
+      try {
+        const sample = unmapped.map(h => ({ column: h, values: sampleRows.slice(0,3).map(r => r[h]).filter(Boolean) }));
+        const resp = await anthropic.messages.create({
+          model: 'claude-sonnet-4-6', max_tokens: 500,
+          messages: [{ role: 'user', content: `Map these CSV columns to DB fields for ${dataType}.\nAvailable DB fields not yet mapped: ${targetFields.filter(f => !mapping[f]).join(', ')}\nCSV columns with sample values: ${JSON.stringify(sample)}\nReturn ONLY JSON like {"csv_col":"db_field",...}. Use "skip" if no match.` }]
+        });
+        const text = (resp.content[0] as any).text || '{}';
+        const m = text.match(/\{[\s\S]*?\}/);
+        if (m) {
+          const ai = JSON.parse(m[0]);
+          for (const [col, field] of Object.entries(ai)) {
+            if (field !== 'skip' && !mapping[field as string] && headers.includes(col) && targetFields.includes(field as string) && !usedHeaders.has(col)) {
+              mapping[field as string] = col;
+              usedHeaders.add(col);
+            }
+          }
+        }
+      } catch {}
     }
     return mapping;
   }
