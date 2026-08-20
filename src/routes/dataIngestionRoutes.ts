@@ -167,6 +167,46 @@ Respond with only the label, nothing else.`
     return parseCSV(text);
   }
 
+
+  function parseExcel(buffer: Buffer): { headers: string[], rows: Record<string, string>[] } {
+    try {
+      const wb = XLSX.read(buffer, { type: 'buffer', cellDates: true });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const raw = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, dateNF: 'yyyy-mm-dd' }) as any[][];
+      if (raw.length < 2) return { headers: [], rows: [] };
+      const headers = (raw[0] as string[]).map((h: string) => String(h||'').toLowerCase().trim().replace(/\s+/g,'_').replace(/[^a-z0-9_]/g,''));
+      const rows = raw.slice(1).filter((r: any[]) => r.some((v: any) => v !== null && v !== '')).map((r: any[]) => {
+        const row: Record<string, string> = {};
+        headers.forEach((h: string, i: number) => { row[h] = String(r[i] ?? '').trim(); });
+        return row;
+      });
+      return { headers, rows };
+    } catch (e) { console.error('Excel parse error:', e); return { headers: [], rows: [] }; }
+  }
+
+  function parseXML(text: string): { headers: string[], rows: Record<string, string>[] } {
+    try {
+      const parser = new XMLParser({ ignoreAttributes: false, parseAttributeValue: true });
+      const obj = parser.parse(text);
+      const findArray = (o: any): any[] => {
+        if (Array.isArray(o) && o.length > 0 && typeof o[0] === 'object') return o;
+        if (typeof o === 'object' && o !== null) {
+          for (const v of Object.values(o)) { const f = findArray(v); if (f.length > 0) return f; }
+        }
+        return [];
+      };
+      const records = findArray(obj);
+      if (!records.length) return { headers: [], rows: [] };
+      const headers = Object.keys(records[0]).map((h: string) => h.toLowerCase().replace(/[^a-z0-9_]/g,'_').replace(/^_+|_+$/g,''));
+      const rows = records.map((r: any) => {
+        const row: Record<string, string> = {};
+        Object.entries(r).forEach(([k, v]: [string, any], i: number) => { row[headers[i]] = String(v ?? '').trim(); });
+        return row;
+      });
+      return { headers, rows };
+    } catch (e) { console.error('XML parse error:', e); return { headers: [], rows: [] }; }
+  }
+
   // â”€â”€ Helper: process and insert rows â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   async function processRows(
     pool: Pool, tenantId: string, dataType: string,
@@ -442,6 +482,8 @@ Respond with only the label, nothing else.`
       }
 
       if (format === 'gsheet' && !rows.length) { const gs = await parseGoogleSheet(data.trim()); headers = gs.headers; rows = gs.rows; }
+      if ((format === 'excel' || format === 'xlsx') && !rows.length) { const buf = Buffer.from(data, 'base64'); const p = parseExcel(buf); headers = p.headers; rows = p.rows; }
+      if (format === 'xml' && !rows.length) { const p = parseXML(typeof data === 'string' ? data : ''); headers = p.headers; rows = p.rows; }
       if (!rows.length) return res.status(400).json({ error: 'No data rows found' }) as any;
 
       // Detect data type
@@ -504,6 +546,8 @@ Respond with only the label, nothing else.`
       }
 
       if (format === 'gsheet') { const gs = await parseGoogleSheet(data.trim()); headers = gs.headers; rows = gs.rows; }
+      if ((format === 'excel' || format === 'xlsx') && !rows.length) { const buf = Buffer.from(data, 'base64'); const p = parseExcel(buf); headers = p.headers; rows = p.rows; }
+      if (format === 'xml' && !rows.length) { const p = parseXML(data); headers = p.headers; rows = p.rows; }
       const dataType = await detectDataType(headers, rows);
       const fieldMap = await mapFields(dataType, headers, rows.slice(0,3));
 
