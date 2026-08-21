@@ -7,6 +7,16 @@
 import { Router, Request, Response } from 'express';
 import { Pool } from 'pg';
 import { requireAuth } from '../middleware/auth';
+
+// Allow internal cron calls with Bearer internal-{tenantId}
+const requireAuthOrInternal = (req: any, res: any, next: any) => {
+  const auth = req.headers.authorization || '';
+  if (auth.startsWith('Bearer internal-')) {
+    req.user = { tenantId: auth.replace('Bearer internal-', ''), role: 'internal' };
+    return next();
+  }
+  return requireAuth(req, res, next);
+};
 import Anthropic from '@anthropic-ai/sdk';
 import { Resend } from 'resend';
 import * as crypto from 'crypto';
@@ -55,7 +65,7 @@ export function createPhase1Router(pool: Pool): Router {
   // ══════════════════════════════════════════════════════════
   // 1. BALANCE SHEET
   // ══════════════════════════════════════════════════════════
-  router.get('/balance-sheet', requireAuth, async (req: Request, res: Response) => {
+  router.get('/balance-sheet', requireAuthOrInternal, async (req: Request, res: Response) => {
     try {
       const t = tid(req);
       const snap = await getFinancialSnapshot(pool, t);
@@ -114,7 +124,7 @@ export function createPhase1Router(pool: Pool): Router {
   // ══════════════════════════════════════════════════════════
   // 2. ANOMALY DETECTION
   // ══════════════════════════════════════════════════════════
-  router.post('/anomaly/detect', requireAuth, async (req: Request, res: Response) => {
+  router.post('/anomaly/detect', requireAuthOrInternal, async (req: Request, res: Response) => {
     try {
       const t = tid(req);
       const snap = await getFinancialSnapshot(pool, t);
@@ -197,7 +207,7 @@ Return ONLY valid JSON array, no markdown.`;
   // ══════════════════════════════════════════════════════════
   // 3. AI SMART INSIGHTS
   // ══════════════════════════════════════════════════════════
-  router.post('/insights/generate', requireAuth, async (req: Request, res: Response) => {
+  router.post('/insights/generate', requireAuthOrInternal, async (req: Request, res: Response) => {
     try {
       const t = tid(req);
       const { insight_type = 'executive_summary' } = req.body;
@@ -568,7 +578,7 @@ Return ONLY valid JSON, no markdown.`;
   // ══════════════════════════════════════════════════════════
   // 9. FILING AUTOMATION
   // ══════════════════════════════════════════════════════════
-  router.post('/filing/generate', requireAuth, async (req: Request, res: Response) => {
+  router.post('/filing/generate', requireAuthOrInternal, async (req: Request, res: Response) => {
     try {
       const t = tid(req);
       const { filing_type, period } = req.body;
