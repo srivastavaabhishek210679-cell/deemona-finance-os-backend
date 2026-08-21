@@ -12,7 +12,6 @@ import { Router, Request, Response } from 'express';
 import { Pool } from 'pg';
 import { requireAuth } from '../middleware/auth';
 import Anthropic from '@anthropic-ai/sdk';
-import { processIngestData } from './dataIngestionRoutes';
 import { Resend } from 'resend';
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -21,7 +20,14 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 // ── Shared: call internal ingest API ─────────────────────────
 async function ingestData(pool: Pool, tenantId: string, data: string, format: string, sourceName: string, sourceType: string): Promise<{inserted:number,updated:number,errors:number,dataType:string}> {
   try {
-    const result = await processIngestData(pool, tenantId, data, format);
+    const backendUrl = process.env.BACKEND_URL || 'https://deemona-finance-os-api.onrender.com';
+    const authToken = await pool.query('SELECT id FROM users WHERE tenant_id=$1 LIMIT 1', [tenantId]).then(r => r.rows[0]?.id).catch(()=>null);
+    const resp = await fetch(backendUrl + '/api/ingest', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer internal-' + tenantId },
+      body: JSON.stringify({ data, format, tenantId }),
+    });
+    const result = await resp.json() as any;
     const outcome = { inserted: result.inserted||0, updated: result.updated||0, errors: result.errors||0, dataType: result.dataType||'UNKNOWN' };
 
     // Log the ingest
