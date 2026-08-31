@@ -70,9 +70,17 @@ const PORT = parseInt(process.env.PORT ?? '4000');
 // â”€â”€ Security & parsing â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 app.use(helmet());
 app.use(cors({
-  origin: [process.env.FRONTEND_URL || 'http://localhost:5174', 'http://localhost:5174', 'http://localhost:5173', 'https://deemona-finance-os-frontend.onrender.com'],
+  origin: (origin, callback) => {
+    const allowed = ['http://localhost:5173','http://localhost:5174','https://deemona-finance-os-frontend.onrender.com',process.env.FRONTEND_URL].filter(Boolean);
+    if (!origin || allowed.includes(origin)) callback(null, true);
+    else callback(new Error('Not allowed by CORS'));
+  },
   credentials: true,
+  methods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS'],
+  allowedHeaders: ['Content-Type','Authorization','x-internal-tenant','x-cron-secret'],
+  optionsSuccessStatus: 200,
 }));
+app.options("*", cors());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
