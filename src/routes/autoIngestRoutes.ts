@@ -467,7 +467,7 @@ router.post('/teams/webhook', async (req: Request, res: Response) => {
       }
     }
     // Teams requires a specific response format
-    res.json({ type: 'message', text: isFinancial ? '✅ Financial data captured.' : '👍 Received.' });
+    res.json({ type: 'message', text: '👍 Received.' });
   } catch(e) { res.status(500).json({ error: String(e) }); }
 });
 
