@@ -768,7 +768,7 @@ Return ONLY valid JSON.`;
         { headers: { "User-Agent": "Mozilla/5.0" } }
       );
       if (!resp.ok) throw new Error("Yahoo error");
-      const data = await resp.json();
+      const data = await resp.json() as any;
       const meta = data?.chart?.result?.[0]?.meta;
       if (!meta) throw new Error("No data");
       res.json({
