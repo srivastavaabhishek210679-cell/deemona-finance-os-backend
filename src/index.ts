@@ -1,4 +1,5 @@
 import dotenv from 'dotenv';
+import { createMessageStreamRouter } from './routes/messageStreamRoutes';
 import { createUniversalPollerRouter, startUniversalPoller } from './routes/universalPollerRoutes';
 import { createSSERouter, setupCDC } from './routes/sseRoutes';
 dotenv.config();
@@ -214,6 +215,7 @@ app.post('/api/brief', async (req: express.Request, res: express.Response) => {
   setupCDC(pool);
 app.use('/api/stream', createSSERouter(pool));
   app.use('/api/poller', createUniversalPollerRouter(pool));
+  app.use('/api/stream-connections', createMessageStreamRouter(pool));
   startUniversalPoller(pool);
 // ── 404 ───────────────────────────────────────────────────────
 app.use((_req, res) => {
