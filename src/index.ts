@@ -1,4 +1,4 @@
-﻿import dotenv from 'dotenv';
+import dotenv from 'dotenv';
 import { createSSERouter, setupCDC } from './routes/sseRoutes';
 dotenv.config();
 
@@ -69,7 +69,7 @@ const app = express();
 app.set('trust proxy', 1); // Required for Render/reverse proxy
 const PORT = parseInt(process.env.PORT ?? '4000');
 
-// â”€â”€ Security & parsing â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Security & parsing ────────────────────────────────────────
 app.use(helmet());
 app.use(cors({
   origin: (origin, callback) => {
@@ -86,23 +86,23 @@ app.options("*", cors());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
-// â”€â”€ Rate limiting â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Rate limiting ─────────────────────────────────────────────
 app.use('/api/', rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 500,
   message: { error: 'Too many requests, please try again later.' },
 }));
 
-// â”€â”€ Health check â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Health check ──────────────────────────────────────────────
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok', app: 'Deemona AI Finance OS', timestamp: new Date().toISOString() });
 });
 
-// â”€â”€ API Routes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── API Routes ────────────────────────────────────────────────
 // Auth
 app.use('/api/auth', createAuthRouter(pool));
 
-// Finance Memory (Phase 1 â€” active now)
+// Finance Memory (Phase 1 — active now)
 app.use('/api/memory', createMemoryRouter(pool));
 
 // Accounting module (Phase A)
@@ -152,7 +152,7 @@ app.use('/api/billing',     createBillingRouter(pool));
 app.use('/api/admin',       createAdminRouter(pool));
 app.use('/api/export',      createDataExportRouter(pool));
 
-// Future routes â€” uncomment as each phase is built:
+// Future routes — uncomment as each phase is built:
 // app.use('/api/auth',        authRouter(pool));
 // app.use('/api/accounting',  accountingRouter(pool));
 // app.use('/api/treasury',    treasuryRouter(pool));
@@ -170,7 +170,7 @@ app.use('/api/export',      createDataExportRouter(pool));
 // app.use('/api/twin',        digitalTwinRouter(pool));   // Phase 5
 // app.use('/api/automation',  automationRouter(pool));    // Phase 2
 
-// â”€â”€ AI Brief endpoint (no auth â€” for Decision Center) â”€â”€â”€â”€â”€â”€â”€â”€
+// ── AI Brief endpoint (no auth — for Decision Center) ────────
 app.post('/api/brief', async (req: express.Request, res: express.Response) => {
   try {
     const { prompt } = req.body;
@@ -212,32 +212,32 @@ app.post('/api/brief', async (req: express.Request, res: express.Response) => {
 
   setupCDC(pool);
 app.use('/api/stream', createSSERouter(pool));
-// â”€â”€ 404 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── 404 ───────────────────────────────────────────────────────
 app.use((_req, res) => {
   res.status(404).json({ error: 'Route not found' });
 });
 
-// â”€â”€ Global error handler â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Global error handler ──────────────────────────────────────
 app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   console.error('[Error]', err.message);
   res.status(500).json({ error: 'Internal server error' });
 });
 
-// â”€â”€ Cron jobs â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Cron jobs ─────────────────────────────────────────────────
 function registerCronJobs() {
-  // Every 30 seconds â€” generate embeddings for new memories
+  // Every 30 seconds — generate embeddings for new memories
   cron.schedule('*/30 * * * * *', () => processEmbeddingQueue(pool));
 
-  // Every 6 hours â€” refresh AI summaries for vendors/customers
+  // Every 6 hours — refresh AI summaries for vendors/customers
   cron.schedule('0 */6 * * *', () => refreshEntityProfiles(pool));
 
-  // Daily at 2am IST (8:30pm UTC) â€” archive old low-priority memories
+  // Daily at 2am IST (8:30pm UTC) — archive old low-priority memories
   cron.schedule('30 20 * * *', () => archiveOldMemories(pool));
 
   console.log('[Cron] 3 Finance Memory jobs registered');
 }
 
-// â”€â”€ Start â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Start ─────────────────────────────────────────────────────
 // SSE broadcast helper - broadcast to all clients of a tenant
 const sseClients = new Map<string, Set<any>>();
 
@@ -319,11 +319,11 @@ app.listen(PORT, () => {
     registerAutomationCrons(pool);
     startMultiTenantMonitor(pool).catch(err => {
       console.error('[Monitor] Fatal error:', err);
-      // Restart after 30s — never permanently stop
+      // Restart after 30s � never permanently stop
       setTimeout(() => startMultiTenantMonitor(pool), 30000);
     });
   } else {
-    console.log('[Monitor] DRIVE_FOLDER_ID not set — monitor not started. Add to Render env vars to activate.');
+    console.log('[Monitor] DRIVE_FOLDER_ID not set � monitor not started. Add to Render env vars to activate.');
   }
   });
 }
@@ -366,4 +366,5 @@ cron.schedule('* * * * *', async () => {
   } catch(e) { console.error('[Cron] Fatal:', e); }
 });
 console.log('[Cron] Report scheduler started');
+
 
