@@ -304,79 +304,8 @@ async function start() {
   await testConnection();
   registerCronJobs();
   
-// ── pg_notify CDC — Real-Time Change Detection ───────────────
-// Listen for any DB changes and broadcast to connected SSE clients
-
-const setupCDC = async () => {
-  const cdcClient = new pg.Client({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
-  await cdcClient.connect();
-
-  // Create notification triggers for key tables
-  await cdcClient.query(`
-    CREATE OR REPLACE FUNCTION notify_data_change()
-    RETURNS trigger AS $
-    DECLARE
-      payload json;
-    BEGIN
-      payload = json_build_object(
-        'table', TG_TABLE_NAME,
-        'action', TG_OP,
-        'tenant_id', COALESCE(NEW.tenant_id, OLD.tenant_id),
-        'timestamp', NOW()
-      );
-      PERFORM pg_notify('data_change', payload::text);
-      RETURN COALESCE(NEW, OLD);
-    END;
-    $ LANGUAGE plpgsql;
-  `).catch(() => {});
-
-  // Add triggers to key tables
-  const tables = [
-    'ar_invoices', 'ap_invoices', 'expenses', 'bank_transactions',
-    'payments', 'employees', 'purchase_orders', 'inventory_items',
-    'journal_entries', 'bank_accounts'
-  ];
-
-  for (const table of tables) {
-    await cdcClient.query(`
-      DROP TRIGGER IF EXISTS ${table}_notify ON ${table};
-      CREATE TRIGGER ${table}_notify
-      AFTER INSERT OR UPDATE OR DELETE ON ${table}
-      FOR EACH ROW EXECUTE FUNCTION notify_data_change();
-    `).catch(() => {});
-  }
-
-  // Listen for notifications
-  await cdcClient.query('LISTEN data_change');
-  
-  cdcClient.on('notification', (msg) => {
-    try {
-      const payload = JSON.parse(msg.payload || '{}');
-      const tenantId = payload.tenant_id;
-      const event = {
-        type: 'data_change',
-        table: payload.table,
-        action: payload.action,
-        tenant_id: tenantId,
-        timestamp: payload.timestamp,
-      };
-      
-      // Broadcast to all SSE clients for this tenant
-      broadcastToTenant(tenantId, event);
-      console.log(`[CDC] ${payload.action} on ${payload.table} for tenant ${tenantId?.substring(0,8)}`);
-    } catch(e) {}
-  });
-
-  cdcClient.on('error', (err) => {
-    console.error('[CDC] Connection error:', err.message);
-    // Reconnect after 5s
-    setTimeout(setupCDC, 5000);
-  });
-
-  console.log('[CDC] pg_notify listeners active on', tables.length, 'tables');
-};
-
 setupCDC(pool);
+
 
 app.listen(PORT, () => {
     console.log(`[Server] Deemona AI Finance OS running on port ${PORT}`);
