@@ -334,18 +334,17 @@ app.get('/api/stream/live', (req: any, res: any) => {
   // Decode tenant from JWT
   let tenantId = '';
   try {
-    const jwt = require('jsonwebtoken');
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'secret') as any;
+    const jwtLib = require('jsonwebtoken');
+    const decoded = jwtLib.verify(token, process.env.JWT_SECRET || 'deemona-secret-2024') as any;
     tenantId = decoded.tenantId;
   } catch { return res.status(401).end(); }
 
-  res.writeHead(200, {
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache',
-    'Connection': 'keep-alive',
-    'Access-Control-Allow-Origin': '*',
-    'X-Accel-Buffering': 'no',
-  });
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders();
 
   // Register client
   if (!sseClients.has(tenantId)) sseClients.set(tenantId, new Set());
