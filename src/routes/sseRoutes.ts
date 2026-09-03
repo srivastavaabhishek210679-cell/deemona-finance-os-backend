@@ -16,7 +16,7 @@ export const setupCDC = async (pool: Pool) => {
   try {
     const pg = await import('pg');
     const cdcClient = new pg.default.Client({
-      connectionString: process.env.DATABASE_URL,
+      connectionString: process.env.DATABASE_DIRECT_URL || process.env.DATABASE_URL?.replace('-pooler', '') || process.env.DATABASE_URL,
       ssl: { rejectUnauthorized: false },
     });
     await cdcClient.connect();
