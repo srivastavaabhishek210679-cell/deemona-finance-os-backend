@@ -305,13 +305,6 @@ async function start() {
   await testConnection();
   registerCronJobs();
   
-// ── pg_notify CDC — Real-Time Change Detection ───────────────
-// Listen for any DB changes and broadcast to connected SSE clients
-
-  });
-
-  console.log('[CDC] pg_notify listeners active on', tables.length, 'tables');
-};
 
 
 
