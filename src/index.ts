@@ -241,6 +241,9 @@ function registerCronJobs() {
 setupCDC(pool);
 
 
+  app.use('/api/stream', createSSERouter(pool));
+  setupCDC(pool);
+
 app.listen(PORT, () => {
     console.log(`[Server] Deemona AI Finance OS running on port ${PORT}`);
     console.log(`[Server] Health: http://localhost:${PORT}/health`);
@@ -256,7 +259,6 @@ app.listen(PORT, () => {
     });
   } else {
     console.log('[Monitor] DRIVE_FOLDER_ID not set — monitor not started. Add to Render env vars to activate.');
-  }
   });
 }
 
