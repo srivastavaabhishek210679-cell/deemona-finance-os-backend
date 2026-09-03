@@ -252,7 +252,7 @@ const broadcastToTenant = (tenantId: string, event: any) => {
 
 // SSE endpoint - clients connect here for real-time updates
 app.get('/api/stream/live', (req: any, res: any) => {
-  console.log('[SSE] Hit /api/stream/live, token:', req.query.token ? 'present' : 'missing');
+  console.log('[SSE] Request received, token:', req.query.token ? 'present' : 'missing');
   const token = req.headers.authorization?.replace('Bearer ', '') || req.query.token;
   if (!token) return res.status(401).end();
   
