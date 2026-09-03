@@ -1,4 +1,5 @@
 import dotenv from 'dotenv';
+import { createUniversalPollerRouter, startUniversalPoller } from './routes/universalPollerRoutes';
 import { createSSERouter, setupCDC } from './routes/sseRoutes';
 dotenv.config();
 
@@ -212,6 +213,8 @@ app.post('/api/brief', async (req: express.Request, res: express.Response) => {
 
   setupCDC(pool);
 app.use('/api/stream', createSSERouter(pool));
+  app.use('/api/poller', createUniversalPollerRouter(pool));
+  startUniversalPoller(pool);
 // ── 404 ───────────────────────────────────────────────────────
 app.use((_req, res) => {
   res.status(404).json({ error: 'Route not found' });
@@ -319,11 +322,11 @@ app.listen(PORT, () => {
     registerAutomationCrons(pool);
     startMultiTenantMonitor(pool).catch(err => {
       console.error('[Monitor] Fatal error:', err);
-      // Restart after 30s � never permanently stop
+      // Restart after 30s � never permanently stop
       setTimeout(() => startMultiTenantMonitor(pool), 30000);
     });
   } else {
-    console.log('[Monitor] DRIVE_FOLDER_ID not set � monitor not started. Add to Render env vars to activate.');
+    console.log('[Monitor] DRIVE_FOLDER_ID not set � monitor not started. Add to Render env vars to activate.');
   }
   });
 }
