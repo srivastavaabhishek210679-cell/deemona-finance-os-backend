@@ -1,5 +1,5 @@
 ﻿import dotenv from 'dotenv';
-import { createSSERouter, setupCDC } from './routes/sseRoutes'; from './routes/sseRoutes';
+import { createSSERouter, setupCDC } from './routes/sseRoutes';
 dotenv.config();
 
 import express from 'express';
