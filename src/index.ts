@@ -1,4 +1,5 @@
 import dotenv from 'dotenv';
+import { createNetSuiteRouter, startNetSuitePoller } from './routes/netsuiteRoutes';
 import { createMessageStreamRouter } from './routes/messageStreamRoutes';
 import { createUniversalPollerRouter, startUniversalPoller } from './routes/universalPollerRoutes';
 import { createSSERouter, setupCDC } from './routes/sseRoutes';
@@ -216,6 +217,8 @@ app.post('/api/brief', async (req: express.Request, res: express.Response) => {
 app.use('/api/stream', createSSERouter(pool));
   app.use('/api/poller', createUniversalPollerRouter(pool));
   app.use('/api/stream-connections', createMessageStreamRouter(pool));
+  app.use('/api/netsuite', createNetSuiteRouter(pool));
+  startNetSuitePoller(pool);
   startUniversalPoller(pool);
 // ── 404 ───────────────────────────────────────────────────────
 app.use((_req, res) => {
