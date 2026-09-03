@@ -1,5 +1,5 @@
 ﻿import dotenv from 'dotenv';
-import { createSSERouter, setupCDC } from './routes/sseRoutes';
+import { createSSERouter, setupCDC, createSSETestRouter } from './routes/sseRoutes';
 dotenv.config();
 
 import express from 'express';
@@ -211,6 +211,7 @@ app.post('/api/brief', async (req: express.Request, res: express.Response) => {
 });
 
 app.use('/api/stream', createSSERouter(pool));
+app.use('/api/cdc', createSSETestRouter(pool));
 // â”€â”€ 404 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 app.use((_req, res) => {
   res.status(404).json({ error: 'Route not found' });
