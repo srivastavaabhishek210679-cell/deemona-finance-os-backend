@@ -251,6 +251,59 @@ const broadcastToTenant = (tenantId: string, event: any) => {
   });
 };
 
+// SSE endpoint - clients connect here for real-time updates
+app.get('/api/stream/live', (req: any, res: any) => {
+  console.log('[SSE] Hit /api/stream/live, token:', req.query.token ? 'present' : 'missing');
+  const token = req.headers.authorization?.replace('Bearer ', '') || req.query.token;
+  if (!token) return res.status(401).end();
+  
+  // Decode tenant from JWT
+  let tenantId = '';
+  try {
+    const jwtLib = require('jsonwebtoken');
+    const decoded = jwtLib.verify(token, process.env.JWT_SECRET!) as any;
+    tenantId = decoded.tenantId;
+  } catch { return res.status(401).end(); }
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders();
+
+  // Register client
+  if (!sseClients.has(tenantId)) sseClients.set(tenantId, new Set());
+  sseClients.get(tenantId)!.add(res);
+  console.log(`[SSE] Client connected for tenant ${tenantId?.substring(0,8)}, total: ${sseClients.get(tenantId)!.size}`);
+
+  // Send initial connection confirmation
+  res.write(`data: ${JSON.stringify({ type: 'connected', timestamp: new Date().toISOString() })}
+
+`);
+
+  // Heartbeat every 30s to keep connection alive
+  const heartbeat = setInterval(() => {
+    try { res.write(`data: ${JSON.stringify({ type: 'heartbeat', timestamp: new Date().toISOString() })}
+
+`); }
+    catch { clearInterval(heartbeat); }
+  }, 30000);
+
+  // Cleanup on disconnect
+  req.on('close', () => {
+    clearInterval(heartbeat);
+    sseClients.get(tenantId)?.delete(res);
+    console.log(`[SSE] Client disconnected for tenant ${tenantId?.substring(0,8)}`);
+  });
+});
+
+// Start CDC after DB connection
+
+async function start() {
+  await testConnection();
+  registerCronJobs();
+  
 setupCDC(pool);
 
 
