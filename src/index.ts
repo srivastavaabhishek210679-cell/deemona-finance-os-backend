@@ -41,7 +41,6 @@ import { createAIStudioRouter } from './routes/aiStudioRoutes';
 import { createRBACRouter } from './middleware/rbac';
 import { createDataIngestionRouter } from './routes/dataIngestionRoutes';
 import { createAutoIngestRouter, runScheduledIngests, runEmailIngest } from './routes/autoIngestRoutes';
-import { createSSERouter, setupCDC } from './routes/sseRoutes';
 import { createBatch4DocsRouter } from './routes/batch4DocsRoutes';
 import { createPhase1Router, runDailyAIJobs } from './routes/phase1Routes';
 import { createEventBusRouter } from './routes/eventBusRoutes';
@@ -376,7 +375,7 @@ const setupCDC = async () => {
   console.log('[CDC] pg_notify listeners active on', tables.length, 'tables');
 };
 
-setupCDC(pool);
+setupCDC().catch(e => console.error('[CDC] Setup failed:', e.message));
 
 app.listen(PORT, () => {
     console.log(`[Server] Deemona AI Finance OS running on port ${PORT}`);
