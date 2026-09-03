@@ -210,6 +210,7 @@ app.post('/api/brief', async (req: express.Request, res: express.Response) => {
   }
 });
 
+  setupCDC(pool);
 app.use('/api/stream', createSSERouter(pool));
 // â”€â”€ 404 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 app.use((_req, res) => {
