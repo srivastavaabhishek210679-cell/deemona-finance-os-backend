@@ -241,7 +241,6 @@ async function start() {
   
 // ── pg_notify CDC — Real-Time Change Detection ───────────────
 // Listen for any DB changes and broadcast to connected SSE clients
-import pg from 'pg';
 
 const setupCDC = async () => {
   const cdcClient = new pg.Client({ connectionString: process.env.DATABASE_URL });
