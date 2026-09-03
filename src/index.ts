@@ -1,4 +1,5 @@
 ﻿import dotenv from 'dotenv';
+import { createSSERouter, setupCDC } from './routes/sseRoutes';
 dotenv.config();
 
 import express from 'express';
@@ -209,6 +210,7 @@ app.post('/api/brief', async (req: express.Request, res: express.Response) => {
   }
 });
 
+app.use('/api/stream', createSSERouter(pool));
 // â”€â”€ 404 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 app.use((_req, res) => {
   res.status(404).json({ error: 'Route not found' });
@@ -375,7 +377,7 @@ const setupCDC = async () => {
   console.log('[CDC] pg_notify listeners active on', tables.length, 'tables');
 };
 
-setupCDC().catch(e => console.error('[CDC] Setup failed:', e.message));
+  setupCDC(pool);
 
 app.listen(PORT, () => {
     console.log(`[Server] Deemona AI Finance OS running on port ${PORT}`);
