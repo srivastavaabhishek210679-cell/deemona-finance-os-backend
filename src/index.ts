@@ -238,6 +238,21 @@ function registerCronJobs() {
 }
 
 // â”€â”€ Start â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// SSE broadcast helper - broadcast to all clients of a tenant
+const sseClients = new Map<string, Set<any>>();
+
+const broadcastToTenant = (tenantId: string, event: any) => {
+  if (!tenantId) return;
+  const clients = sseClients.get(tenantId);
+  if (!clients || clients.size === 0) return;
+  const data = `data: ${JSON.stringify(event)}
+
+`;
+  clients.forEach(client => {
+    try { client.write(data); } catch {}
+  });
+};
+
 setupCDC(pool);
 
 
