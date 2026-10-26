@@ -333,6 +333,9 @@ export const METRICS: Record<string, Metric> = {
       return {
         total_ar_outstanding: totalAr,
         customers_listed: customers.length, escalation_count: escalate.length, escalate_customers: escalate.map(c => c.customer),
+        escalation_exposure_total: escalate.reduce((s, c) => s + c.overdue_amount, 0),
+        monitor_count: customers.length - escalate.length, monitor_customers: customers.filter(c => !c.escalate).map(c => c.customer),
+        monitor_exposure_total: customers.filter(c => !c.escalate).reduce((s, c) => s + c.overdue_amount, 0),
         customers,
         newly_overdue_today: fresh.map(r => ({ customer: r.customer, invoice: r.invoice_number, amount: num(r.balance_due) })),
         escalation_rule: 'flagged if any invoice is >60 days overdue or the customer owes >10% of total AR',
