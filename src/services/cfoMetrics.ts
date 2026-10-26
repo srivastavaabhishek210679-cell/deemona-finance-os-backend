@@ -6,6 +6,10 @@
 // { available:false, needs_data:[...] } so the agent says so honestly.
 // ============================================================
 import { Pool } from 'pg';
+import {
+  ensureCfoSetupTables, DIM_KINDS, DimKind, DIM_COLUMN, TARGET_METRICS, FORECAST_METRICS, PERIOD_TYPES,
+  istTodayYmd, currentPeriodStart, periodEnd, daysBetweenInclusive, addMonthsYmd,
+} from './cfoSetup';
 
 type Json = Record<string, any>;
 
@@ -64,6 +68,99 @@ async function coreNumbers(pool: Pool, t: string) {
     dso: sales90 > 0 ? round((arOut / sales90) * 90, 1) : null,
     dpo: purchases90 > 0 ? round((apOut / purchases90) * 90, 1) : null,
   };
+}
+
+/** Current and prior comparable date ranges for a named period (Indian fiscal year Apr-Mar). */
+function periodRanges(period: string): { cur: [Date, Date]; prev: [Date, Date] } | null {
+  const today = istNow(); const y = today.getFullYear(), m = today.getMonth();
+  let cur: [Date, Date], prev: [Date, Date];
+  switch (period) {
+    case 'today_vs_last_week': cur = [today, today]; prev = [addDays(today, -7), addDays(today, -7)]; break;
+    case 'week_vs_prev_week': cur = [addDays(today, -6), today]; prev = [addDays(today, -13), addDays(today, -7)]; break;
+    case 'mtd_vs_prev_mtd': {
+      const pm = m === 0 ? 11 : m - 1, py = m === 0 ? y - 1 : y;
+      cur = [new Date(y, m, 1), today];
+      prev = [new Date(py, pm, 1), new Date(py, pm, Math.min(today.getDate(), lastDayOfMonth(py, pm)))]; break;
+    }
+    case 'month_vs_prev_month': {
+      const pm = m === 0 ? 11 : m - 1, py = m === 0 ? y - 1 : y;
+      const ppm = pm === 0 ? 11 : pm - 1, ppy = pm === 0 ? py - 1 : py;
+      cur = [new Date(py, pm, 1), new Date(py, pm, lastDayOfMonth(py, pm))];
+      prev = [new Date(ppy, ppm, 1), new Date(ppy, ppm, lastDayOfMonth(ppy, ppm))]; break;
+    }
+    case 'last_quarter_vs_prev_quarter': {
+      const fyStartYear = m >= 3 ? y : y - 1;                 // FY starts 1 Apr
+      const monthsIntoFY = (y - fyStartYear) * 12 + m - 3;    // 0..11
+      const qIdx = Math.floor(monthsIntoFY / 3);              // current quarter 0..3
+      const curQStart = new Date(fyStartYear, 3 + qIdx * 3, 1);
+      const lqStart = new Date(curQStart.getFullYear(), curQStart.getMonth() - 3, 1);
+      const pqStart = new Date(curQStart.getFullYear(), curQStart.getMonth() - 6, 1);
+      cur = [lqStart, addDays(curQStart, -1)]; prev = [pqStart, addDays(lqStart, -1)]; break;
+    }
+    case 'ytd_vs_prev_ytd': {
+      const fyStartYear = m >= 3 ? y : y - 1;
+      cur = [new Date(fyStartYear, 3, 1), today];
+      prev = [new Date(fyStartYear - 1, 3, 1), new Date(today.getFullYear() - 1, today.getMonth(), Math.min(today.getDate(), lastDayOfMonth(today.getFullYear() - 1, today.getMonth())))]; break;
+    }
+    default: return null;
+  }
+  return { cur, prev };
+}
+
+// ── Step 2 helpers: actuals by metric/dimension, forecasts ───
+type Dim = { kind: DimKind; id: string };
+
+async function actualMetric(pool: Pool, t: string, metric: string, from: string, to: string, dim?: Dim): Promise<number> {
+  const col = dim ? DIM_COLUMN[dim.kind] : '';
+  const one = async (sql: string, params: any[]): Promise<number> => num((await rows(pool, sql, params))[0].v);
+  switch (metric) {
+    case 'revenue':
+      return dim
+        ? one(`SELECT COALESCE(SUM(x.subtotal),0) AS v FROM ar_invoices x LEFT JOIN cfo_entity_defaults df ON df.tenant_id=x.tenant_id AND df.entity_type='customer' AND df.entity_id=x.customer_id::text
+               WHERE x.tenant_id=$1 AND x.status NOT IN ('draft','cancelled') AND x.date::date BETWEEN $2 AND $3 AND COALESCE(x.${col}, df.${col}) = $4::uuid`, [t, from, to, dim.id])
+        : one(`SELECT COALESCE(SUM(subtotal),0) AS v FROM ar_invoices WHERE tenant_id=$1 AND status NOT IN ('draft','cancelled') AND date::date BETWEEN $2 AND $3`, [t, from, to]);
+    case 'vendor_costs':
+      return dim
+        ? one(`SELECT COALESCE(SUM(x.subtotal),0) AS v FROM ap_invoices x LEFT JOIN cfo_entity_defaults df ON df.tenant_id=x.tenant_id AND df.entity_type='vendor' AND df.entity_id=x.vendor_id::text
+               WHERE x.tenant_id=$1 AND x.status NOT IN ('draft','rejected') AND x.date::date BETWEEN $2 AND $3 AND COALESCE(x.${col}, df.${col}) = $4::uuid`, [t, from, to, dim.id])
+        : one(`SELECT COALESCE(SUM(subtotal),0) AS v FROM ap_invoices WHERE tenant_id=$1 AND status NOT IN ('draft','rejected') AND date::date BETWEEN $2 AND $3`, [t, from, to]);
+    case 'payroll':
+      return one(`SELECT COALESCE(SUM(total_gross),0) AS v FROM payroll_runs WHERE tenant_id=$1
+                  AND make_date(year, month, 1) >= date_trunc('month', $2::date) AND make_date(year, month, 1) <= $3::date`, [t, from, to]);
+    case 'cash_in':
+      return one(`SELECT COALESCE(SUM(amount),0) AS v FROM bank_transactions WHERE tenant_id=$1 AND type='credit' AND date::date BETWEEN $2 AND $3`, [t, from, to]);
+    case 'cash_out':
+      return one(`SELECT COALESCE(SUM(amount),0) AS v FROM bank_transactions WHERE tenant_id=$1 AND type='debit' AND date::date BETWEEN $2 AND $3`, [t, from, to]);
+    case 'ebitda': {
+      const [rev, ven, pay, clm] = await Promise.all([
+        actualMetric(pool, t, 'revenue', from, to), actualMetric(pool, t, 'vendor_costs', from, to), actualMetric(pool, t, 'payroll', from, to),
+        one(`SELECT COALESCE(SUM(total_amount),0) AS v FROM expense_claims WHERE tenant_id=$1 AND status='approved' AND date::date BETWEEN $2 AND $3`, [t, from, to]),
+      ]);
+      return rev - ven - pay - clm;
+    }
+    default: throw new Error('unsupported metric ' + metric);
+  }
+}
+
+/** Saves a baseline (trailing 3 completed months average) forecast for this month and the next two.
+ *  The first save wins (ON CONFLICT DO NOTHING) so forecast-vs-actual compares against what was forecast at the time. */
+export async function recordForecasts(pool: Pool, tenantId: string): Promise<number> {
+  await ensureCfoSetupTables(pool);
+  const thisMonth = currentPeriodStart('month', istTodayYmd(), 0);
+  const histFrom = addMonthsYmd(thisMonth, -3), histTo = periodEnd('month', addMonthsYmd(thisMonth, -1));
+  let saved = 0;
+  for (const metric of FORECAST_METRICS) {
+    const avg = (await actualMetric(pool, tenantId, metric, histFrom, histTo)) / 3;
+    if (!(avg > 0)) continue;
+    for (const k of [0, 1, 2]) {
+      const r = await pool.query(
+        `INSERT INTO cfo_forecasts (tenant_id, metric, period_start, forecast_value, source, method)
+         VALUES ($1,$2,$3::date,$4,'system','trailing 3-month average') ON CONFLICT (tenant_id, metric, period_start, source) DO NOTHING`,
+        [tenantId, metric, addMonthsYmd(thisMonth, k), Math.round(avg)]);
+      saved += r.rowCount || 0;
+    }
+  }
+  return saved;
 }
 
 // ── Metric registry ──────────────────────────────────────────
@@ -306,38 +403,9 @@ export const METRICS: Record<string, Metric> = {
       period: { type: 'string', enum: ['today_vs_last_week', 'week_vs_prev_week', 'mtd_vs_prev_mtd', 'month_vs_prev_month', 'last_quarter_vs_prev_quarter', 'ytd_vs_prev_ytd'] },
     }, required: ['measure', 'period'] },
     async run(pool, t, input) {
-      const today = istNow(); const y = today.getFullYear(), m = today.getMonth();
-      let cur: [Date, Date], prev: [Date, Date];
-      switch (input?.period) {
-        case 'today_vs_last_week': cur = [today, today]; prev = [addDays(today, -7), addDays(today, -7)]; break;
-        case 'week_vs_prev_week': cur = [addDays(today, -6), today]; prev = [addDays(today, -13), addDays(today, -7)]; break;
-        case 'mtd_vs_prev_mtd': {
-          const pm = m === 0 ? 11 : m - 1, py = m === 0 ? y - 1 : y;
-          cur = [new Date(y, m, 1), today];
-          prev = [new Date(py, pm, 1), new Date(py, pm, Math.min(today.getDate(), lastDayOfMonth(py, pm)))]; break;
-        }
-        case 'month_vs_prev_month': {
-          const pm = m === 0 ? 11 : m - 1, py = m === 0 ? y - 1 : y;
-          const ppm = pm === 0 ? 11 : pm - 1, ppy = pm === 0 ? py - 1 : py;
-          cur = [new Date(py, pm, 1), new Date(py, pm, lastDayOfMonth(py, pm))];
-          prev = [new Date(ppy, ppm, 1), new Date(ppy, ppm, lastDayOfMonth(ppy, ppm))]; break;
-        }
-        case 'last_quarter_vs_prev_quarter': {
-          const fyStartYear = m >= 3 ? y : y - 1;                 // FY starts 1 Apr
-          const monthsIntoFY = (y - fyStartYear) * 12 + m - 3;    // 0..11
-          const qIdx = Math.floor(monthsIntoFY / 3);              // current quarter 0..3
-          const curQStart = new Date(fyStartYear, 3 + qIdx * 3, 1);
-          const lqStart = new Date(curQStart.getFullYear(), curQStart.getMonth() - 3, 1);
-          const pqStart = new Date(curQStart.getFullYear(), curQStart.getMonth() - 6, 1);
-          cur = [lqStart, addDays(curQStart, -1)]; prev = [pqStart, addDays(lqStart, -1)]; break;
-        }
-        case 'ytd_vs_prev_ytd': {
-          const fyStartYear = m >= 3 ? y : y - 1;
-          cur = [new Date(fyStartYear, 3, 1), today];
-          prev = [new Date(fyStartYear - 1, 3, 1), new Date(today.getFullYear() - 1, today.getMonth(), Math.min(today.getDate(), lastDayOfMonth(today.getFullYear() - 1, today.getMonth())))]; break;
-        }
-        default: return { error: 'unknown period' };
-      }
+      const pr = periodRanges(input?.period);
+      if (!pr) return { error: 'unknown period' };
+      const { cur, prev } = pr;
       const sqlByMeasure: Record<string, string> = {
         revenue: `SELECT COALESCE(SUM(subtotal),0) AS v, COUNT(*) AS n FROM ar_invoices WHERE tenant_id=$1 AND status NOT IN ('draft','cancelled') AND date::date BETWEEN $2 AND $3`,
         cash_in: `SELECT COALESCE(SUM(amount),0) AS v, COUNT(*) AS n FROM bank_transactions WHERE tenant_id=$1 AND type='credit' AND date::date BETWEEN $2 AND $3`,
@@ -584,16 +652,146 @@ export const METRICS: Record<string, Metric> = {
     },
   },
 
-  // ── Placeholders for Step 2 (need new data). They tell the agent honestly what's missing. ──
+  // ── Step 2 metrics (plan, dimensions, forecasts) ──────────────
   target_vs_actual: {
-    description: 'Compare actual revenue/profit/cash against targets or plan (monthly, quarterly, annual).',
-    input_schema: { type: 'object', properties: { metric: { type: 'string' }, period: { type: 'string' } } },
-    async run() { return needsData(['kpi_targets'], 'No revenue / profit / cash targets or annual plan are stored yet, so actual-vs-target and "are we on plan" cannot be answered.'); },
+    description: 'Actual vs target (plan) for a metric over the current or a past month / fiscal quarter / fiscal year, company-wide and per business unit, region or product where targets were set. Gives achievement %, straight-line projection to period end and status (on_track / at_risk / behind / met / missed). Use for "are we meeting our revenue target", "did we meet annual targets", "which BUs underperformed".',
+    input_schema: { type: 'object', properties: {
+      metric: { type: 'string', enum: Object.keys(TARGET_METRICS), description: 'Default revenue.' },
+      period_type: { type: 'string', enum: ['month', 'quarter', 'year'], description: 'Default month. Quarters and year follow the Indian fiscal year (Apr–Mar).' },
+      offset: { type: 'integer', description: '0 = current period (default), -1 = previous period, -2 = the one before…' },
+      dimension_kind: { type: 'string', enum: ['business_unit', 'region', 'product'], description: 'Restrict to targets set for this dimension (plus the company-wide target).' },
+    } },
+    async run(pool, t, input) {
+      await ensureCfoSetupTables(pool);
+      const metric = TARGET_METRICS[input?.metric] ? input.metric : 'revenue';
+      const pt = (PERIOD_TYPES as readonly string[]).includes(input?.period_type) ? input.period_type : 'month';
+      const offset = clampInt(input?.offset, 0, -24, 0);
+      const today = istTodayYmd();
+      const start = currentPeriodStart(pt, today, offset), end = periodEnd(pt, start);
+      const dk = (DIM_KINDS as readonly string[]).includes(input?.dimension_kind) ? input.dimension_kind : null;
+      const targets = await rows(pool,
+        `SELECT t.target_value, t.dimension_kind, t.dimension_id::text AS dimension_id, d.name AS dimension_name
+         FROM cfo_targets t LEFT JOIN cfo_dimensions d ON d.id = t.dimension_id
+         WHERE t.tenant_id=$1 AND t.metric=$2 AND t.period_type=$3 AND t.period_start=$4::date
+           AND ($5::text IS NULL OR t.dimension_kind IS NULL OR t.dimension_kind = $5)`, [t, metric, pt, start, dk]);
+      if (!targets.length) {
+        return needsData([`${metric} target for ${pt} starting ${start}`],
+          `No ${TARGET_METRICS[metric].label} target is set for this ${pt} (${start} to ${end}). Targets are entered in CFO Setup → Targets.`);
+      }
+      const hib = TARGET_METRICS[metric].higher_is_better;
+      const isOver = end < today;
+      const elapsed = isOver ? 1 : Math.min(1, daysBetweenInclusive(start, today) / daysBetweenInclusive(start, end));
+      const to = isOver ? end : today;
+      const items: Json[] = [];
+      for (const tg of targets) {
+        const target = num(tg.target_value);
+        const dim: Dim | undefined = tg.dimension_id ? { kind: tg.dimension_kind, id: tg.dimension_id } : undefined;
+        const actual = await actualMetric(pool, t, metric, start, to, dim);
+        const projected = elapsed > 0 ? actual / elapsed : null;
+        let status: string;
+        if (hib) status = isOver ? (actual >= target ? 'met' : 'missed') : (projected! >= target ? 'on_track' : projected! >= 0.9 * target ? 'at_risk' : 'behind');
+        else status = isOver ? (actual <= target ? 'within_limit' : 'exceeded') : (projected! <= target ? 'on_track' : projected! <= 1.1 * target ? 'at_risk' : 'over_pace');
+        items.push({
+          scope: dim ? `${tg.dimension_kind}: ${tg.dimension_name}` : 'company', target, actual: round(actual, 0),
+          achievement_pct: target > 0 ? round((actual / target) * 100, 1) : null,
+          gap_to_target: round(hib ? target - actual : actual - target, 0),
+          projected_at_period_end: isOver ? null : projected === null ? null : round(projected, 0), status,
+        });
+      }
+      const bad = hib ? ['missed', 'behind', 'at_risk'] : ['exceeded', 'over_pace', 'at_risk'];
+      return {
+        metric, label: TARGET_METRICS[metric].label, period_type: pt, period: { from: start, to: end }, as_of: today,
+        period_complete: isOver, elapsed_pct: round(elapsed * 100, 0), direction: hib ? 'higher is better' : 'lower is better (spending ceiling)',
+        results: items, needing_attention: items.filter(i => bad.includes(i.status)).map(i => i.scope),
+        note: isOver ? undefined : 'Projection is straight-line (actual ÷ share of period elapsed); it ignores seasonality.',
+      };
+    },
   },
+
   breakdown_by_dimension: {
-    description: 'Revenue, margin or cash by business unit, region or product.',
-    input_schema: { type: 'object', properties: { dimension: { type: 'string', enum: ['business_unit', 'region', 'product'] } }, required: ['dimension'] },
-    async run(_p, _t, input) { return needsData([`${input?.dimension || 'dimension'} tag on invoices/transactions`], 'Invoices and transactions carry no business-unit, region or product tag yet.'); },
+    description: 'Revenue (or vendor cost) split by business unit, region or product for a period versus the prior comparable period, with share, growth, decliners and tagging coverage. Cost by business unit is AP-invoiced cost, a proxy for cash consumption. Use for "which products contributed most revenue", "which business units underperformed", "which BUs consumed the most cash".',
+    input_schema: { type: 'object', properties: {
+      dimension: { type: 'string', enum: ['business_unit', 'region', 'product'] },
+      measure: { type: 'string', enum: ['revenue', 'vendor_costs'], description: 'Default revenue.' },
+      period: { type: 'string', enum: ['today_vs_last_week', 'week_vs_prev_week', 'mtd_vs_prev_mtd', 'month_vs_prev_month', 'last_quarter_vs_prev_quarter', 'ytd_vs_prev_ytd'], description: 'Default mtd_vs_prev_mtd.' },
+    }, required: ['dimension'] },
+    async run(pool, t, input) {
+      await ensureCfoSetupTables(pool);
+      const kind: DimKind = input?.dimension;
+      if (!(DIM_KINDS as readonly string[]).includes(kind)) return { error: 'dimension must be business_unit, region or product' };
+      const label = kind.replace('_', ' ');
+      const defined = await rows(pool, `SELECT id::text AS id, name FROM cfo_dimensions WHERE tenant_id=$1 AND kind=$2 AND is_active ORDER BY name`, [t, kind]);
+      if (!defined.length) return needsData([`${label} list`], `No ${label}s are defined yet. Add them in CFO Setup → Dimensions, then map customers/vendors to them.`);
+      const pr = periodRanges(input?.period || 'mtd_vs_prev_mtd');
+      if (!pr) return { error: 'unknown period' };
+      const cost = input?.measure === 'vendor_costs';
+      const tbl = cost ? 'ap_invoices' : 'ar_invoices', ent = cost ? 'vendor' : 'customer', fk = cost ? 'vendor_id' : 'customer_id';
+      const excl = cost ? `('draft','rejected')` : `('draft','cancelled')`;
+      const col = DIM_COLUMN[kind];
+      const sql = `SELECT d.id::text AS dim_id, COALESCE(d.name,'Untagged') AS name, COALESCE(SUM(x.subtotal),0) AS v, COUNT(*) AS n
+                   FROM ${tbl} x
+                   LEFT JOIN cfo_entity_defaults df ON df.tenant_id=x.tenant_id AND df.entity_type='${ent}' AND df.entity_id=x.${fk}::text
+                   LEFT JOIN cfo_dimensions d ON d.id = COALESCE(x.${col}, df.${col})
+                   WHERE x.tenant_id=$1 AND x.status NOT IN ${excl} AND x.date::date BETWEEN $2 AND $3 GROUP BY d.id, d.name`;
+      const [cur, prev] = await Promise.all([
+        rows(pool, sql, [t, ymd(pr.cur[0]), ymd(pr.cur[1])]), rows(pool, sql, [t, ymd(pr.prev[0]), ymd(pr.prev[1])]),
+      ]);
+      type Row = { name: string; current: number; previous: number; invoices: number };
+      const map = new Map<string, Row>();
+      const ensure = (id: string | null, name: string): Row => { const k = id || 'untagged'; if (!map.has(k)) map.set(k, { name, current: 0, previous: 0, invoices: 0 }); return map.get(k)!; };
+      defined.forEach(d => ensure(d.id, d.name));
+      cur.forEach(r => { const e = ensure(r.dim_id, r.name); e.current = num(r.v); e.invoices = parseInt(r.n); });
+      prev.forEach(r => { ensure(r.dim_id, r.name).previous = num(r.v); });
+      const totalCur = Array.from(map.values()).reduce((s, e) => s + e.current, 0);
+      const list = Array.from(map.values()).map(e => ({ ...e, change_pct: pct(e.current, e.previous), share_pct: totalCur > 0 ? round((e.current / totalCur) * 100, 1) : 0 }))
+        .sort((a, b) => b.current - a.current);
+      const untagged = list.find(e => e.name === 'Untagged');
+      const tagged = list.filter(e => e.name !== 'Untagged');
+      const untaggedPct = untagged ? untagged.share_pct : 0;
+      return {
+        dimension: kind, measure: cost ? 'vendor_costs (AP invoiced)' : 'revenue (AR invoiced, pre-tax)',
+        period: input?.period || 'mtd_vs_prev_mtd',
+        current_range: { from: ymd(pr.cur[0]), to: ymd(pr.cur[1]) }, previous_range: { from: ymd(pr.prev[0]), to: ymd(pr.prev[1]) },
+        total_current: totalCur, items: list,
+        top_contributor: tagged.length && tagged[0].current > 0 ? tagged[0].name : null,
+        declined_vs_previous: tagged.filter(e => e.change_pct !== null && e.change_pct < 0).map(e => `${e.name} (${e.change_pct}%)`),
+        untagged_share_pct: untaggedPct,
+        warning: untaggedPct > 30 ? `${untaggedPct}% of this ${cost ? 'cost' : 'revenue'} is not mapped to any ${label}; the split is incomplete. Map customers/vendors in CFO Setup → Mapping.` : undefined,
+        caveat: kind === 'product' ? 'Product is tagged at invoice/customer level, not per invoice line, so multi-product invoices count wholly under one product.' : undefined,
+      };
+    },
+  },
+
+  forecast_vs_actual: {
+    description: 'Compares the saved forecast for a month with actual (or month-to-date projected) revenue, cash received or cash paid. Uses the CFO\'s manual forecast if one was entered, otherwise the system baseline (trailing 3-month average) saved when the month was first seen. Use for "are we ahead or behind forecast".',
+    input_schema: { type: 'object', properties: {
+      metric: { type: 'string', enum: [...FORECAST_METRICS], description: 'Default revenue.' },
+      month_offset: { type: 'integer', description: '0 = current month (default), -1 = last month…' },
+    } },
+    async run(pool, t, input) {
+      await ensureCfoSetupTables(pool);
+      const metric = (FORECAST_METRICS as readonly string[]).includes(input?.metric) ? input.metric : 'revenue';
+      const today = istTodayYmd();
+      const start = currentPeriodStart('month', today, clampInt(input?.month_offset, 0, -24, 0)), end = periodEnd('month', start);
+      const f = await rows(pool, `SELECT forecast_value, source, method, made_on::text AS made_on FROM cfo_forecasts
+                                  WHERE tenant_id=$1 AND metric=$2 AND period_start=$3::date ORDER BY (source='manual') DESC LIMIT 1`, [t, metric, start]);
+      if (!f.length) return needsData([`${metric} forecast for ${start}`], 'No forecast was saved for that month. The system saves a baseline daily from first deploy onward (months before that have none); a manual forecast can be entered in CFO Setup → Forecasts.');
+      const forecast = num(f[0].forecast_value);
+      const isOver = end < today;
+      const elapsed = isOver ? 1 : Math.min(1, daysBetweenInclusive(start, today) / daysBetweenInclusive(start, end));
+      const actual = await actualMetric(pool, t, metric, start, isOver ? end : today);
+      const projected = elapsed > 0 ? actual / elapsed : actual;
+      const compare = isOver ? actual : projected;
+      const variancePct = pct(compare, forecast);
+      const hib = metric !== 'cash_out';
+      const within = variancePct !== null && Math.abs(variancePct) <= 5;
+      return {
+        metric, month: start, forecast, forecast_source: f[0].source, forecast_method: f[0].method, forecast_made_on: f[0].made_on,
+        actual_to_date: round(actual, 0), month_complete: isOver, projected_month_end: isOver ? null : round(projected, 0),
+        variance_pct: variancePct, status: within ? 'on_forecast' : (variancePct! > 0) === hib ? 'ahead' : 'behind',
+        note: 'System baselines are simple trailing averages, so "ahead/behind" mostly reflects change against recent run-rate.',
+      };
+    },
   },
 };
 
@@ -615,6 +813,7 @@ export async function recordSnapshot(pool: Pool, tenantId: string): Promise<Json
     `INSERT INTO cfo_daily_snapshots (tenant_id, snapshot_date, metrics) VALUES ($1, $2::date, $3)
      ON CONFLICT (tenant_id, snapshot_date) DO UPDATE SET metrics = EXCLUDED.metrics, created_at = NOW()`,
     [tenantId, ymd(istNow()), JSON.stringify(metrics)]);
+  await recordForecasts(pool, tenantId).catch(e => console.error('[CFO forecasts]', String(e)));
   return metrics;
 }
 
