@@ -81,7 +81,7 @@ export function createCfoSetupRouter(pool: Pool): Router {
       const table = type === 'vendor' ? 'vendors' : 'customers';
       const r = await pool.query(
         `SELECT e.id::text AS entity_id, e.name, d.business_unit_id, d.region_id, d.product_id
-         FROM ${table} e LEFT JOIN cfo_entity_defaults d ON d.tenant_id = e.tenant_id AND d.entity_type = $2 AND d.entity_id = e.id::text
+         FROM ${table} e LEFT JOIN cfo_entity_defaults d ON d.tenant_id = e.tenant_id::text AND d.entity_type = $2 AND d.entity_id = e.id::text
          WHERE e.tenant_id = $1 ORDER BY e.name LIMIT 2000`, [tid(req), type]);
       res.json({ entity_type: type, entities: r.rows });
     } catch (e) { res.status(500).json({ error: String(e) }); }
@@ -155,11 +155,11 @@ export function createCfoSetupRouter(pool: Pool): Router {
         const col = DIM_COLUMN[k];
         const rev = await pool.query(
           `SELECT COALESCE(SUM(ar.subtotal),0) AS total, COALESCE(SUM(ar.subtotal) FILTER (WHERE COALESCE(ar.${col}, cd.${col}) IS NOT NULL),0) AS tagged
-           FROM ar_invoices ar LEFT JOIN cfo_entity_defaults cd ON cd.tenant_id=ar.tenant_id AND cd.entity_type='customer' AND cd.entity_id=ar.customer_id::text
+           FROM ar_invoices ar LEFT JOIN cfo_entity_defaults cd ON cd.tenant_id=ar.tenant_id::text AND cd.entity_type='customer' AND cd.entity_id=ar.customer_id::text
            WHERE ar.tenant_id=$1 AND ar.status NOT IN ('draft','cancelled') AND ar.date::date >= CURRENT_DATE - 90`, [t]);
         const cost = await pool.query(
           `SELECT COALESCE(SUM(ap.subtotal),0) AS total, COALESCE(SUM(ap.subtotal) FILTER (WHERE COALESCE(ap.${col}, vd.${col}) IS NOT NULL),0) AS tagged
-           FROM ap_invoices ap LEFT JOIN cfo_entity_defaults vd ON vd.tenant_id=ap.tenant_id AND vd.entity_type='vendor' AND vd.entity_id=ap.vendor_id::text
+           FROM ap_invoices ap LEFT JOIN cfo_entity_defaults vd ON vd.tenant_id=ap.tenant_id::text AND vd.entity_type='vendor' AND vd.entity_id=ap.vendor_id::text
            WHERE ap.tenant_id=$1 AND ap.status NOT IN ('draft','rejected') AND ap.date::date >= CURRENT_DATE - 90`, [t]);
         const p = (x: any): number => { const total = parseFloat(x.total); return total > 0 ? Math.round((parseFloat(x.tagged) / total) * 1000) / 10 : 0; };
         out[k] = { revenue_tagged_pct: p(rev.rows[0]), cost_tagged_pct: p(cost.rows[0]) };

@@ -116,12 +116,12 @@ async function actualMetric(pool: Pool, t: string, metric: string, from: string,
   switch (metric) {
     case 'revenue':
       return dim
-        ? one(`SELECT COALESCE(SUM(x.subtotal),0) AS v FROM ar_invoices x LEFT JOIN cfo_entity_defaults df ON df.tenant_id=x.tenant_id AND df.entity_type='customer' AND df.entity_id=x.customer_id::text
+        ? one(`SELECT COALESCE(SUM(x.subtotal),0) AS v FROM ar_invoices x LEFT JOIN cfo_entity_defaults df ON df.tenant_id=x.tenant_id::text AND df.entity_type='customer' AND df.entity_id=x.customer_id::text
                WHERE x.tenant_id=$1 AND x.status NOT IN ('draft','cancelled') AND x.date::date BETWEEN $2 AND $3 AND COALESCE(x.${col}, df.${col}) = $4::uuid`, [t, from, to, dim.id])
         : one(`SELECT COALESCE(SUM(subtotal),0) AS v FROM ar_invoices WHERE tenant_id=$1 AND status NOT IN ('draft','cancelled') AND date::date BETWEEN $2 AND $3`, [t, from, to]);
     case 'vendor_costs':
       return dim
-        ? one(`SELECT COALESCE(SUM(x.subtotal),0) AS v FROM ap_invoices x LEFT JOIN cfo_entity_defaults df ON df.tenant_id=x.tenant_id AND df.entity_type='vendor' AND df.entity_id=x.vendor_id::text
+        ? one(`SELECT COALESCE(SUM(x.subtotal),0) AS v FROM ap_invoices x LEFT JOIN cfo_entity_defaults df ON df.tenant_id=x.tenant_id::text AND df.entity_type='vendor' AND df.entity_id=x.vendor_id::text
                WHERE x.tenant_id=$1 AND x.status NOT IN ('draft','rejected') AND x.date::date BETWEEN $2 AND $3 AND COALESCE(x.${col}, df.${col}) = $4::uuid`, [t, from, to, dim.id])
         : one(`SELECT COALESCE(SUM(subtotal),0) AS v FROM ap_invoices WHERE tenant_id=$1 AND status NOT IN ('draft','rejected') AND date::date BETWEEN $2 AND $3`, [t, from, to]);
     case 'payroll':
@@ -325,12 +325,15 @@ export const METRICS: Record<string, Metric> = {
         rows(pool, `SELECT COALESCE(SUM(balance_due),0) AS v FROM ar_invoices WHERE tenant_id=$1 AND status NOT IN ('paid','cancelled','draft')`, [t]),
       ]);
       const totalAr = num(total[0].v);
+      const customers = list.map(r => ({
+        customer: r.customer, invoices: parseInt(r.invoices), overdue_amount: num(r.overdue_amount), max_days_overdue: r.max_days_overdue,
+        escalate: r.max_days_overdue > 60 || (totalAr > 0 && num(r.overdue_amount) / totalAr > 0.1),
+      }));
+      const escalate = customers.filter(c => c.escalate);
       return {
         total_ar_outstanding: totalAr,
-        customers: list.map(r => ({
-          customer: r.customer, invoices: parseInt(r.invoices), overdue_amount: num(r.overdue_amount), max_days_overdue: r.max_days_overdue,
-          escalate: r.max_days_overdue > 60 || (totalAr > 0 && num(r.overdue_amount) / totalAr > 0.1),
-        })),
+        customers_listed: customers.length, escalation_count: escalate.length, escalate_customers: escalate.map(c => c.customer),
+        customers,
         newly_overdue_today: fresh.map(r => ({ customer: r.customer, invoice: r.invoice_number, amount: num(r.balance_due) })),
         escalation_rule: 'flagged if any invoice is >60 days overdue or the customer owes >10% of total AR',
       };
@@ -730,7 +733,7 @@ export const METRICS: Record<string, Metric> = {
       const col = DIM_COLUMN[kind];
       const sql = `SELECT d.id::text AS dim_id, COALESCE(d.name,'Untagged') AS name, COALESCE(SUM(x.subtotal),0) AS v, COUNT(*) AS n
                    FROM ${tbl} x
-                   LEFT JOIN cfo_entity_defaults df ON df.tenant_id=x.tenant_id AND df.entity_type='${ent}' AND df.entity_id=x.${fk}::text
+                   LEFT JOIN cfo_entity_defaults df ON df.tenant_id=x.tenant_id::text AND df.entity_type='${ent}' AND df.entity_id=x.${fk}::text
                    LEFT JOIN cfo_dimensions d ON d.id = COALESCE(x.${col}, df.${col})
                    WHERE x.tenant_id=$1 AND x.status NOT IN ${excl} AND x.date::date BETWEEN $2 AND $3 GROUP BY d.id, d.name`;
       const [cur, prev] = await Promise.all([
