@@ -298,7 +298,7 @@ List each risk with: severity (High/Medium/Low), probability, impact, and mitiga
   // Auto-generate daily insights (called by cron)
   router.post('/insights/auto-generate', async (req: Request, res: Response) => {
     const secret = req.headers['x-cron-secret'];
-    if (secret !== process.env.CRON_SECRET && secret !== 'deemona-cron-2026') return res.status(401).json({ error: 'Unauthorized' }) as any;
+    if (!process.env.CRON_SECRET || secret !== process.env.CRON_SECRET) return res.status(401).json({ error: 'Unauthorized' }) as any;
     try {
       const tenants = await pool.query(`SELECT DISTINCT tenant_id FROM users WHERE is_active=true`).catch(() => ({ rows: [] }));
       let generated = 0;
@@ -762,7 +762,7 @@ Return ONLY valid JSON.`;
   router.get("/market/quote", async (req: Request, res: Response) => {
     try {
       const sym = req.query.sym as string;
-      if (!sym) return res.status(400).json({ error: "sym required" }) as any;
+      if (!sym || !/^[A-Za-z0-9&\-]{1,20}$/.test(sym)) return res.status(400).json({ error: "valid sym required" }) as any;
       const resp = await fetch(
         "https://query1.finance.yahoo.com/v8/finance/chart/" + sym + ".NS?interval=1d&range=1d",
         { headers: { "User-Agent": "Mozilla/5.0" } }

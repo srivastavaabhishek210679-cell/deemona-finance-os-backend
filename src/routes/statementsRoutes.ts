@@ -291,18 +291,24 @@ export function createStatementsRouter(pool: Pool): Router {
     try {
       const tenantId = tid(req);
 
-      const [banks, ar, ap, payroll] = await Promise.all([
+      const [banks, ar, ap, payroll, sales90, purch90, outflow90] = await Promise.all([
         pool.query('SELECT COALESCE(SUM(current_balance),0) as total FROM bank_accounts WHERE tenant_id=$1 AND is_active=TRUE', [tenantId]),
         pool.query("SELECT COALESCE(SUM(balance_due),0) as total FROM ar_invoices WHERE tenant_id=$1 AND status NOT IN ('paid','cancelled')", [tenantId]),
         pool.query("SELECT COALESCE(SUM(balance_due),0) as total FROM ap_invoices WHERE tenant_id=$1 AND status NOT IN ('paid','rejected')", [tenantId]),
-        pool.query("SELECT COALESCE(SUM(total_gross),0) as monthly FROM payroll_runs WHERE tenant_id=$1 AND status='paid' ORDER BY year DESC, month DESC LIMIT 1", [tenantId]),
+        pool.query("SELECT total_gross as monthly FROM payroll_runs WHERE tenant_id=$1 AND status='paid' ORDER BY year DESC, month DESC LIMIT 1", [tenantId]),
+        pool.query("SELECT COALESCE(SUM(total_amount),0) as total FROM ar_invoices WHERE tenant_id=$1 AND status NOT IN ('draft','cancelled') AND date::date >= CURRENT_DATE - 90", [tenantId]),
+        pool.query("SELECT COALESCE(SUM(total_amount),0) as total FROM ap_invoices WHERE tenant_id=$1 AND status NOT IN ('draft','rejected') AND date::date >= CURRENT_DATE - 90", [tenantId]),
+        pool.query("SELECT COALESCE(SUM(amount),0) as total FROM bank_transactions WHERE tenant_id=$1 AND type='debit' AND date::date >= CURRENT_DATE - 90", [tenantId]),
       ]);
 
       const cash = parseFloat(banks.rows[0].total);
       const arBal = parseFloat(ar.rows[0].total);
       const apBal = parseFloat(ap.rows[0].total);
-      const monthlyBurn = parseFloat(payroll.rows[0].monthly) || 1;
+      const payrollMonthly = parseFloat(payroll.rows[0]?.monthly || 0);
+      const bankBurn = parseFloat(outflow90.rows[0].total) / 3;   // real average monthly outflow
+      const monthlyBurn = bankBurn > 0 ? bankBurn : (payrollMonthly || 1);
       const runway = cash / monthlyBurn;
+      const sales = parseFloat(sales90.rows[0].total), purchases = parseFloat(purch90.rows[0].total);
 
       res.json({
         cash_position: cash,
@@ -313,8 +319,9 @@ export function createStatementsRouter(pool: Pool): Router {
         current_ratio: apBal > 0 ? parseFloat(((cash + arBal) / apBal).toFixed(2)) : 0,
         quick_ratio: apBal > 0 ? parseFloat((cash / apBal).toFixed(2)) : 0,
         monthly_burn: monthlyBurn,
-        dso: arBal > 0 ? Math.round(arBal / (arBal / 30)) : 0,
-        dpo: apBal > 0 ? Math.round(apBal / (apBal / 30)) : 0,
+        // DSO = AR outstanding / credit sales (90d) x 90 ; DPO likewise on purchases (was a constant 30 before)
+        dso: sales > 0 ? Math.round((arBal / sales) * 90) : null,
+        dpo: purchases > 0 ? Math.round((apBal / purchases) * 90) : null,
       });
     } catch (err) { res.status(500).json({ error: String(err) }); }
   });
@@ -355,7 +362,7 @@ export function createStatementsRouter(pool: Pool): Router {
         // Payroll
         pool.query(
           `SELECT COALESCE(SUM(total_gross),0) as total
-           FROM payroll_runs WHERE tenant_id=$1 AND month=$4 AND year=$5`,
+           FROM payroll_runs WHERE tenant_id=$1 AND month=$2 AND year=$3`,
           [tenantId, m, y]
         ),
       ]);
@@ -385,6 +392,8 @@ export function createStatementsRouter(pool: Pool): Router {
         ebitda,
         ebitda_margin: rev > 0 ? ((ebitda / rev) * 100).toFixed(1) : '0',
         tax,
+        tax_is_estimate: true,
+        tax_note: 'Flat 25% of positive EBITDA; not a computed tax liability',
         net_profit: netProfit,
         net_margin: rev > 0 ? ((netProfit / rev) * 100).toFixed(1) : '0',
       });

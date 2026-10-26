@@ -3,6 +3,7 @@ import { createNetSuiteRouter, startNetSuitePoller } from './routes/netsuiteRout
 import { createMessageStreamRouter } from './routes/messageStreamRoutes';
 import { createUniversalPollerRouter, startUniversalPoller } from './routes/universalPollerRoutes';
 import { createSSERouter, setupCDC } from './routes/sseRoutes';
+import { startCfoSnapshotJob } from './services/cfoMetrics';
 dotenv.config();
 
 import express from 'express';
@@ -214,6 +215,7 @@ app.post('/api/brief', async (req: express.Request, res: express.Response) => {
 });
 
   setupCDC(pool);
+  startCfoSnapshotJob(pool);
 app.use('/api/stream', createSSERouter(pool));
   app.use('/api/poller', createUniversalPollerRouter(pool));
   app.use('/api/stream-connections', createMessageStreamRouter(pool));

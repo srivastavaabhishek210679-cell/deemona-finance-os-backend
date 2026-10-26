@@ -20,14 +20,15 @@ export function createForecastingRouter(pool: Pool): Router {
         pool.query('SELECT COALESCE(SUM(current_balance),0) as total FROM bank_accounts WHERE tenant_id=$1 AND is_active=TRUE', [tenantId]),
         pool.query(`SELECT COALESCE(SUM(balance_due),0) as total, due_date FROM ar_invoices WHERE tenant_id=$1 AND status NOT IN ('paid','cancelled') GROUP BY due_date ORDER BY due_date`, [tenantId]),
         pool.query(`SELECT COALESCE(SUM(balance_due),0) as total, due_date FROM ap_invoices WHERE tenant_id=$1 AND status NOT IN ('paid','rejected') GROUP BY due_date ORDER BY due_date`, [tenantId]),
-        pool.query(`SELECT COALESCE(SUM(total_gross),0) as monthly FROM payroll_runs WHERE tenant_id=$1 AND status IN ('paid','approved') ORDER BY year DESC, month DESC LIMIT 1`, [tenantId]),
-        pool.query(`SELECT type, AVG(amount) as avg_amount, COUNT(*) as count FROM bank_transactions WHERE tenant_id=$1 AND date >= CURRENT_DATE - INTERVAL '90 days' GROUP BY type`, [tenantId]),
+        pool.query(`SELECT total_gross as monthly FROM payroll_runs WHERE tenant_id=$1 AND status IN ('paid','approved') ORDER BY year DESC, month DESC LIMIT 1`, [tenantId]),
+        pool.query(`SELECT type, SUM(amount) as total_amount, COUNT(*) as count FROM bank_transactions WHERE tenant_id=$1 AND date >= CURRENT_DATE - INTERVAL '90 days' GROUP BY type`, [tenantId]),
       ]);
 
       const currentCash = parseFloat(banks.rows[0].total);
-      const monthlyPayroll = parseFloat(payroll.rows[0].monthly) || 0;
-      const avgMonthlyInflow = txnTrend.rows.find((r: any) => r.type === 'credit')?.avg_amount * 30 || 0;
-      const avgMonthlyOutflow = txnTrend.rows.find((r: any) => r.type === 'debit')?.avg_amount * 30 || monthlyPayroll;
+      const monthlyPayroll = parseFloat(payroll.rows[0]?.monthly || 0);
+      // Monthly average = 90-day total / 3 (the old code multiplied the AVERAGE transaction amount by 30)
+      const avgMonthlyInflow = parseFloat(txnTrend.rows.find((r: any) => r.type === 'credit')?.total_amount || 0) / 3;
+      const avgMonthlyOutflow = parseFloat(txnTrend.rows.find((r: any) => r.type === 'debit')?.total_amount || 0) / 3 || monthlyPayroll;
 
       // Build day-by-day forecast
       const forecast: any[] = [];
@@ -74,7 +75,7 @@ export function createForecastingRouter(pool: Pool): Router {
       // Find critical dates
       const criticalDates = forecast.filter(f => f.is_low || f.is_negative);
       const lowestPoint = forecast.reduce((min, f) => f.closing < min.closing ? f : min, forecast[0]);
-      const runway = monthlyPayroll > 0 ? currentCash / monthlyPayroll : 0;
+      const runway = avgMonthlyOutflow > 0 ? currentCash / avgMonthlyOutflow : 0;   // was payroll-only
 
       res.json({
         current_cash: currentCash,
@@ -179,7 +180,7 @@ export function createForecastingRouter(pool: Pool): Router {
         GROUP BY year, month ORDER BY year, month
       `, [tenantId]);
 
-      const payroll = await pool.query(`SELECT COALESCE(AVG(total_gross),0) as avg FROM payroll_runs WHERE tenant_id=$1 AND status='paid'`, [tenantId]);
+      const payroll = await pool.query(`SELECT COALESCE(AVG(total_gross),0) as avg FROM payroll_runs WHERE tenant_id=$1 AND status='paid'`, [tenantId]);   // AVG is a valid aggregate here
       const avgPayroll = parseFloat(payroll.rows[0].avg) || 0;
       const hist = historical.rows;
       const avgMonthlyExp = hist.length > 0
