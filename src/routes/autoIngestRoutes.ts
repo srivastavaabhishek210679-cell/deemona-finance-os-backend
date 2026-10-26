@@ -1,4 +1,4 @@
-﻿// ============================================================
+// ============================================================
 // Deemona AI Finance OS — Auto-Ingest Engine
 // File: src/routes/autoIngestRoutes.ts
 // Channels:
@@ -397,7 +397,7 @@ export function createAutoIngestRouter(pool: Pool): Router {
   // ── CRON trigger (internal) ───────────────────────────────
   router.post('/run-scheduled', async (req: Request, res: Response) => {
     const secret = req.headers['x-cron-secret'];
-    if (secret !== process.env.CRON_SECRET && secret !== 'deemona-cron-2026') {
+    if (!process.env.CRON_SECRET || secret !== process.env.CRON_SECRET) {
       return res.status(401).json({ error: 'Unauthorized' }) as any;
     }
     const [schedResult, emailResult] = await Promise.all([

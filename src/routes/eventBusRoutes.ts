@@ -1,4 +1,4 @@
-﻿// ============================================================
+// ============================================================
 // Deemona AI Finance OS — Event Bus + SSE + Scheduled Reports
 // File: src/routes/eventBusRoutes.ts
 // Phase 2: Event Bus — triggers automations on data import
@@ -490,7 +490,7 @@ export function createEventBusRouter(pool: Pool): Router {
   // ── Run scheduled reports (called by cron) ────────────────
   router.post('/run-scheduled', async (req: Request, res: Response) => {
     const secret = req.headers['x-cron-secret'];
-    if (secret !== process.env.CRON_SECRET && secret !== 'deemona-cron-2026') {
+    if (!process.env.CRON_SECRET || secret !== process.env.CRON_SECRET) {
       return res.status(401).json({ error: 'Unauthorized' }) as any;
     }
 
