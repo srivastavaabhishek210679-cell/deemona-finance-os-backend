@@ -142,7 +142,7 @@ export function createPhase1Router(pool: Pool): Router {
         pool.query(`SELECT AVG(total_amount) as avg, STDDEV(total_amount) as std FROM ar_invoices WHERE tenant_id=$1 AND created_at > NOW()-INTERVAL '90 days'`, [t]),
         pool.query(`SELECT AVG(total_amount) as avg, STDDEV(total_amount) as std FROM expense_claims WHERE tenant_id=$1 AND created_at > NOW()-INTERVAL '90 days'`, [t]),
         pool.query(`SELECT AVG(total_gross) as avg, STDDEV(total_gross) as std FROM payroll_runs WHERE tenant_id=$1`, [t]),
-      ]).catch(() => Array(3).fill({ rows: [{}] }));
+      ].map((p: Promise<any>) => p.catch(() => ({ rows: [{}] }))));
 
       const anomalies = [];
       const prompt = `You are a financial anomaly detection AI for Deemona Finance OS.
@@ -161,9 +161,9 @@ Current Financial Snapshot:
 - Employees: ${snap.employees}
 
 Historical Averages:
-- Avg AR Invoice: ₹${parseFloat(arHistory[0].rows[0]?.avg || 0).toLocaleString('en-IN')} (±₹${parseFloat(arHistory[0].rows[0]?.std || 0).toLocaleString('en-IN')})
-- Avg Expense: ₹${parseFloat(expHistory[0].rows[0]?.avg || 0).toLocaleString('en-IN')}
-- Avg Payroll: ₹${parseFloat(payHistory[0].rows[0]?.avg || 0).toLocaleString('en-IN')}
+- Avg AR Invoice: ₹${parseFloat(arHistory.rows[0]?.avg || 0).toLocaleString('en-IN')} (±₹${parseFloat(arHistory.rows[0]?.std || 0).toLocaleString('en-IN')})
+- Avg Expense: ₹${parseFloat(expHistory.rows[0]?.avg || 0).toLocaleString('en-IN')}
+- Avg Payroll: ₹${parseFloat(payHistory.rows[0]?.avg || 0).toLocaleString('en-IN')}
 
 Identify 3-6 specific anomalies or risks. For each return JSON array:
 [{"category":"revenue|expense|ar|ap|cash|payroll","metric":"specific metric","severity":"low|medium|high|critical","description":"what is unusual","explanation":"why this matters and what to do","expected_value":number,"actual_value":number,"deviation_pct":number}]
