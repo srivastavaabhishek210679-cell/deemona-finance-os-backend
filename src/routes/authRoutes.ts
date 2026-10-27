@@ -95,7 +95,7 @@ async function sendVerificationEmail(to: string, code: string): Promise<void> {
   if (!r.ok) throw new Error('Could not send the verification email');
 }
 // Checks and consumes the code. Wrong guesses are counted (and persisted) so codes cannot be brute-forced.
-async function consumeEmailCode(pool: Pool, email: string, code: string): Promise<string | null> {
+async function consumeEmailCode(pool: Pool, email: string, code: string, consume = true): Promise<string | null> {
   await ensureVerifyTable(pool);
   if (!/^\d{6}$/.test(code)) return 'Enter the 6-digit verification code sent to your email';
   const r = await pool.query('SELECT * FROM email_verifications WHERE email = $1', [email]);
@@ -110,7 +110,7 @@ async function consumeEmailCode(pool: Pool, email: string, code: string): Promis
     await pool.query('UPDATE email_verifications SET attempts = attempts + 1 WHERE email = $1', [email]);
     return 'Incorrect code';
   }
-  await pool.query('DELETE FROM email_verifications WHERE email = $1', [email]);
+  if (consume) await pool.query('DELETE FROM email_verifications WHERE email = $1', [email]);
   return null;
 }
 const TERMS_REQUIRED_MSG = 'You must accept the Terms of Service, Privacy Policy and Acceptable Use Policy to create an account';
@@ -176,6 +176,20 @@ export function createAuthRouter(pool: Pool): Router {
     } catch (err) {
       console.error('[Auth] send-code error:', err);
       res.status(502).json({ error: 'Could not send the verification email. Please try again shortly.' });
+    }
+  });
+
+  // ── POST /api/auth/register/verify-code ── checks the emailed code (does not use it up; /register does)
+  router.post('/register/verify-code', async (req: Request, res: Response) => {
+    try {
+      const email = String(req.body?.email || '').trim().toLowerCase();
+      if (!validEmail(email)) { res.status(400).json({ error: 'Enter a valid email address' }); return; }
+      const err = await consumeEmailCode(pool, email, String(req.body?.email_otp || ''), false);
+      if (err) { res.status(400).json({ error: err }); return; }
+      res.json({ success: true, verified: true });
+    } catch (e) {
+      console.error('[Auth] verify-code error:', e);
+      res.status(500).json({ error: 'Could not verify the code. Please try again.' });
     }
   });
 
