@@ -250,7 +250,11 @@ async function processFile(pool: Pool, tenantId: string, file: DriveFile, apiKey
     // Call the ingest API internally
     const ingestResp = await fetch(`http://localhost:${process.env.PORT || 4001}/api/ingest`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-internal-tenant': tenantId },
+      headers: {
+        'Content-Type': 'application/json',
+        'x-internal-tenant': tenantId,
+        ...(process.env.CRON_SECRET ? { Authorization: 'Bearer internal-' + process.env.CRON_SECRET + '.' + tenantId } : {}),
+      },
       body: JSON.stringify({ data, format, tenantId }),
     });
 
@@ -313,7 +317,11 @@ async function processFile(pool: Pool, tenantId: string, file: DriveFile, apiKey
 }
 
 // ── Main monitor function (called by cron) ────────────────────
-export async function runDriveMonitor(pool: Pool): Promise<{ checked: number; processed: number }> {
+let lastDriveRun = 0;
+export async function runDriveMonitor(pool: Pool, force = false): Promise<{ checked: number; processed: number }> {
+  const gapMs = Math.max(1, Number(process.env.DRIVE_MONITOR_MINUTES) || 10) * 60000;
+  if (!force && Date.now() - lastDriveRun < gapMs) return { checked: 0, processed: 0 };
+  lastDriveRun = Date.now();
   let checked = 0, processed = 0;
 
   try {
@@ -343,7 +351,7 @@ export async function runDriveMonitor(pool: Pool): Promise<{ checked: number; pr
         const files = await listNewFiles(config.folderId, apiKey, config.lastChecked);
         const newFiles = files.filter(f => !processedIds.has(f.id));
 
-        console.log(`[DriveMonitor] Tenant ${row.tenant_id}: ${files.length} files found, ${newFiles.length} new`);
+        if (newFiles.length > 0) console.log(`[DriveMonitor] Tenant ${row.tenant_id}: ${files.length} files found, ${newFiles.length} new`);
 
         for (const file of newFiles) {
           await processFile(pool, row.tenant_id, file, apiKey, config.recipients);
@@ -410,7 +418,7 @@ export function createDriveMonitorRouter(pool: Pool): Router {
   // ── Run monitor manually ──────────────────────────────────
   router.post('/run', requireAuth, async (req: Request, res: Response) => {
     try {
-      const result = await runDriveMonitor(pool);
+      const result = await runDriveMonitor(pool, true);
       res.json({ success: true, ...result });
     } catch (e) {
       res.status(500).json({ error: String(e) });

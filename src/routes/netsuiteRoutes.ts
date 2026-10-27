@@ -410,13 +410,15 @@ function getNestedValue(obj: any, path: string): any {
 
 // ── Background auto-sync every 60 seconds ────────────────────
 export function startNetSuitePoller(pool: Pool) {
-  console.log('[NetSuite] Starting auto-sync poller (60s interval)');
+  const syncMinutes = Math.max(1, Math.floor(Number(process.env.NETSUITE_SYNC_MINUTES) || 15));
+  const tickMs = Math.min(300000, syncMinutes * 60000);
+  console.log(`[NetSuite] Starting auto-sync poller (every ${syncMinutes} min)`);
   setInterval(async () => {
     try {
       const connections = await pool.query(
         `SELECT nc.*, nc.tenant_id FROM netsuite_connections nc
          WHERE nc.is_active=true
-         AND (nc.last_sync_at IS NULL OR NOW() - nc.last_sync_at > INTERVAL '60 seconds')`
+         AND (nc.last_sync_at IS NULL OR NOW() - nc.last_sync_at > INTERVAL '${syncMinutes} minutes')`
       ).catch(() => ({ rows: [] }));
 
       for (const conn of connections.rows) {
@@ -431,5 +433,5 @@ export function startNetSuitePoller(pool: Pool) {
         console.log(`[NetSuite] Auto-synced tenant ${conn.tenant_id?.substring(0,8)}`);
       }
     } catch {}
-  }, 60000);
+  }, tickMs);
 }

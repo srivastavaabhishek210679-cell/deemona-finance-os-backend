@@ -378,7 +378,8 @@ async function syncConnection(pool: Pool, connection: any): Promise<any> {
 
 // ── Background Poller — runs on server startup ───────────────
 export function startUniversalPoller(pool: Pool) {
-  console.log('[UniversalPoller] Starting background poller...');
+  const tickMs = Math.max(60000, Number(process.env.POLLER_TICK_MS) || 300000);
+  console.log(`[UniversalPoller] Starting background poller (checks every ${Math.round(tickMs / 60000)} min)`);
 
   setInterval(async () => {
     try {
@@ -395,5 +396,5 @@ export function startUniversalPoller(pool: Pool) {
         }).catch(() => {});
       }
     } catch {}
-  }, 30000); // Check every 30 seconds which connections are due
+  }, tickMs); // Check which connections are due
 }
