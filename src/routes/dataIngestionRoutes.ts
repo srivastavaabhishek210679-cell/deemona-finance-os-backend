@@ -1,4 +1,4 @@
-﻿// ============================================================
+// ============================================================
 // Deemona AI Finance OS â€” Unified Data Ingestion Engine
 // File: src/routes/dataIngestionRoutes.ts
 // Single entry point for all data imports
@@ -10,12 +10,21 @@
 import { Router, Request, Response } from 'express';
 import { Pool } from 'pg';
 import { requireAuth } from '../middleware/auth';
+import * as nodeCrypto from 'crypto';
 
-// Allow internal calls with Bearer internal-{tenantId}
+// Internal calls send "Bearer internal-<CRON_SECRET>.<tenantId>". Rejected unless CRON_SECRET is set (>=16 chars) and matches.
 const requireAuthOrInternal = (req: any, res: any, next: any) => {
-  const auth = req.headers.authorization || '';
+  const auth = String(req.headers.authorization || '');
   if (auth.startsWith('Bearer internal-')) {
-    req.user = { tenantId: auth.replace('Bearer internal-', ''), role: 'internal' };
+    const secret = process.env.CRON_SECRET || '';
+    const rest = auth.slice('Bearer internal-'.length);
+    const dot = rest.lastIndexOf('.');
+    const given = dot > 0 ? rest.slice(0, dot) : '';
+    const tenantId = dot > 0 ? rest.slice(dot + 1) : '';
+    const ga = Buffer.from(given), sb = Buffer.from(secret);
+    const ok = secret.length >= 16 && ga.length === sb.length && nodeCrypto.timingSafeEqual(ga, sb) && /^[0-9a-f-]{36}$/i.test(tenantId);
+    if (!ok) return res.status(401).json({ error: 'Unauthorized' });
+    req.user = { tenantId, role: 'internal' };
     return next();
   }
   return requireAuth(req, res, next);

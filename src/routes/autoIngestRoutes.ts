@@ -24,7 +24,7 @@ async function ingestData(pool: Pool, tenantId: string, data: string, format: st
     const authToken = await pool.query('SELECT id FROM users WHERE tenant_id=$1 LIMIT 1', [tenantId]).then(r => r.rows[0]?.id).catch(()=>null);
     const resp = await fetch(backendUrl + '/api/ingest', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer internal-' + tenantId },
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer internal-' + process.env.CRON_SECRET + '.' + tenantId },
       body: JSON.stringify({ data, format, tenantId }),
     });
     const result = await resp.json() as any;
