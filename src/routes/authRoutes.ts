@@ -9,6 +9,25 @@ const JWT_SECRET = process.env.JWT_SECRET || 'deemona-secret';
 const JWT_EXPIRES = process.env.JWT_EXPIRES_IN || '7d';
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
 
+// Proof of consent: when, which version, from which IP.
+let consentReady: Promise<void> | null = null;
+function ensureConsentColumns(pool: Pool): Promise<void> {
+  if (!consentReady) {
+    consentReady = pool.query(
+      'ALTER TABLE users ADD COLUMN IF NOT EXISTS terms_accepted_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS terms_version TEXT, ADD COLUMN IF NOT EXISTS terms_accepted_ip TEXT'
+    ).then(() => undefined).catch((e) => { consentReady = null; throw e; });
+  }
+  return consentReady;
+}
+function clientIp(req: Request): string {
+  const xf = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+  return (xf || req.ip || '').slice(0, 64);
+}
+function cleanVersion(v: any): string {
+  return typeof v === 'string' && /^[0-9A-Za-z._-]{1,20}$/.test(v) ? v : 'unknown';
+}
+const TERMS_REQUIRED_MSG = 'You must accept the Terms of Service, Privacy Policy and Acceptable Use Policy to create an account';
+
 function generateToken(user: any, tenant: any): string {
   return jwt.sign(
     { id: user.id, tenantId: user.tenant_id, email: user.email,
@@ -34,20 +53,23 @@ async function verifyGoogleToken(idToken: string): Promise<{ sub: string; email:
 
 export function createAuthRouter(pool: Pool): Router {
   const router = Router();
+  ensureConsentColumns(pool).catch((e) => console.error('[Auth] could not add consent columns:', e));
 
   // â”€â”€ POST /api/auth/register â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // Returns success:true â€” client must redirect to login
   router.post('/register', async (req: Request, res: Response) => {
     const client = await pool.connect();
     try {
+      await ensureConsentColumns(pool);
       await client.query('BEGIN');
-      const { company_name, industry, gstin, first_name, last_name, email, password } = req.body;
+      const { company_name, industry, gstin, first_name, last_name, email, password, accepted_terms, terms_version } = req.body;
       if (!company_name || !email || !password || !first_name) {
-        res.status(400).json({ error: 'company_name, first_name, email, and password are required' }); return;
+        await client.query('ROLLBACK'); res.status(400).json({ error: 'company_name, first_name, email, and password are required' }); return;
       }
-      if (password.length < 8) { res.status(400).json({ error: 'Password must be at least 8 characters' }); return; }
+      if (password.length < 8) { await client.query('ROLLBACK'); res.status(400).json({ error: 'Password must be at least 8 characters' }); return; }
+      if (accepted_terms !== true) { await client.query('ROLLBACK'); res.status(400).json({ error: TERMS_REQUIRED_MSG }); return; }
       const existing = await client.query('SELECT id FROM users WHERE email = $1', [email.toLowerCase()]);
-      if (existing.rows.length) { res.status(409).json({ error: 'Email already registered. Please sign in.' }); return; }
+      if (existing.rows.length) { await client.query('ROLLBACK'); res.status(409).json({ error: 'Email already registered. Please sign in.' }); return; }
       const slug = slugify(company_name);
       const tenant = await client.query(
         'INSERT INTO tenants (name, slug, industry, gstin) VALUES ($1,$2,$3,$4) RETURNING *',
@@ -55,8 +77,8 @@ export function createAuthRouter(pool: Pool): Router {
       );
       const hash = await bcrypt.hash(password, 12);
       await client.query(
-        "INSERT INTO users (tenant_id, email, password_hash, first_name, last_name, role, is_verified) VALUES ($1,$2,$3,$4,$5,'owner',TRUE)",
-        [tenant.rows[0].id, email.toLowerCase(), hash, first_name, last_name]
+        "INSERT INTO users (tenant_id, email, password_hash, first_name, last_name, role, is_verified, terms_accepted_at, terms_version, terms_accepted_ip) VALUES ($1,$2,$3,$4,$5,'owner',TRUE,NOW(),$6,$7)",
+        [tenant.rows[0].id, email.toLowerCase(), hash, first_name, last_name, cleanVersion(terms_version), clientIp(req)]
       );
       const defaultAccounts = [
         {code:'1000',name:'Cash and Cash Equivalents',type:'asset',sub:'current_asset'},
@@ -117,12 +139,13 @@ export function createAuthRouter(pool: Pool): Router {
   router.post('/google', async (req: Request, res: Response) => {
     const client = await pool.connect();
     try {
-      const { id_token, company_name, industry } = req.body;
+      const { id_token, company_name, industry, accepted_terms, terms_version } = req.body;
       if (!id_token) { res.status(400).json({ error: 'id_token is required' }); return; }
 
       const google = await verifyGoogleToken(id_token);
       if (!google) { res.status(401).json({ error: 'Invalid Google token' }); return; }
 
+      await ensureConsentColumns(pool);
       await client.query('BEGIN');
 
       // Check if user already exists
@@ -152,12 +175,17 @@ export function createAuthRouter(pool: Pool): Router {
         return;
       }
 
+      if (accepted_terms !== true) {
+        await client.query('ROLLBACK');
+        res.status(400).json({ error: TERMS_REQUIRED_MSG }); return;
+      }
+
       // Create tenant + user
       const slug = slugify(company_name);
       const tenant = await client.query('INSERT INTO tenants (name, slug, industry) VALUES ($1,$2,$3) RETURNING *', [company_name, slug, industry || 'Technology']);
       const user = await client.query(
-        "INSERT INTO users (tenant_id, email, google_id, first_name, last_name, avatar_url, role, is_verified) VALUES ($1,$2,$3,$4,$5,$6,'owner',TRUE) RETURNING *",
-        [tenant.rows[0].id, google.email, google.sub, google.given_name || google.name, google.family_name || '', google.picture]
+        "INSERT INTO users (tenant_id, email, google_id, first_name, last_name, avatar_url, role, is_verified, terms_accepted_at, terms_version, terms_accepted_ip) VALUES ($1,$2,$3,$4,$5,$6,'owner',TRUE,NOW(),$7,$8) RETURNING *",
+        [tenant.rows[0].id, google.email, google.sub, google.given_name || google.name, google.family_name || '', google.picture, cleanVersion(terms_version), clientIp(req)]
       );
       const defaultAccounts = [
         {code:'1000',name:'Cash and Cash Equivalents',type:'asset',sub:'current_asset'},
