@@ -2,6 +2,7 @@
 import { Pool } from 'pg';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import nodeCrypto from 'crypto';
 import { requireAuth } from '../middleware/auth';
 import { sendPasswordResetEmail } from '../services/emailService';
 
@@ -26,6 +27,92 @@ function clientIp(req: Request): string {
 function cleanVersion(v: any): string {
   return typeof v === 'string' && /^[0-9A-Za-z._-]{1,20}$/.test(v) ? v : 'unknown';
 }
+// ── Email verification before account creation ──
+let verifyReady: Promise<void> | null = null;
+function ensureVerifyTable(pool: Pool): Promise<void> {
+  if (!verifyReady) {
+    verifyReady = pool.query(`CREATE TABLE IF NOT EXISTS email_verifications (
+      email TEXT PRIMARY KEY,
+      code_hash TEXT NOT NULL,
+      expires_at TIMESTAMPTZ NOT NULL,
+      attempts INT NOT NULL DEFAULT 0,
+      sent_count INT NOT NULL DEFAULT 1,
+      window_start TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      last_sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`).then(() => undefined).catch((e) => { verifyReady = null; throw e; });
+  }
+  return verifyReady;
+}
+const CODE_MINUTES = 10;
+const MAX_ATTEMPTS = 5;
+const RESEND_COOLDOWN_SEC = 60;
+const MAX_CODES_PER_HOUR = 5;
+const ipHits = new Map<string, { n: number; reset: number }>();
+function ipAllowed(ip: string): boolean {
+  const now = Date.now();
+  const h = ipHits.get(ip);
+  if (!h || h.reset < now) { ipHits.set(ip, { n: 1, reset: now + 3600000 }); return true; }
+  h.n++; return h.n <= 12;
+}
+function hashCode(email: string, code: string): string {
+  return nodeCrypto.createHash('sha256').update(email + '|' + code + '|' + JWT_SECRET).digest('hex');
+}
+function validEmail(e: string): boolean { return e.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(e); }
+async function sendVerificationEmail(to: string, code: string): Promise<void> {
+  if (process.env.SMTP_HOST) {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const nodemailer = require('nodemailer');
+    const port = Number(process.env.SMTP_PORT) || 587;
+    const user = process.env.SMTP_USER || '';
+    const tx = nodemailer.createTransport({
+      host: process.env.SMTP_HOST, port,
+      secure: port === 465 || process.env.SMTP_SECURE === 'true',
+      auth: user ? { user, pass: process.env.SMTP_PASS || '' } : undefined,
+      connectionTimeout: 10000, greetingTimeout: 10000, socketTimeout: 15000,
+    });
+    await tx.sendMail({
+      from: process.env.SMTP_FROM || process.env.EMAIL_FROM || user,
+      to, subject: 'Your Deemona verification code: ' + code,
+      text: 'Your Deemona AI Finance OS verification code is ' + code + '. It expires in ' + CODE_MINUTES + ' minutes. If you did not request it, ignore this email.',
+      html: '<div style="font-family:Arial,sans-serif;max-width:480px"><h2>Verify your email</h2><p>Use this code to finish creating your Deemona AI Finance OS account:</p><p style="font-size:32px;font-weight:700;letter-spacing:8px">' + code + '</p><p>It expires in ' + CODE_MINUTES + ' minutes. If you did not request it, ignore this email.</p></div>',
+    });
+    return;
+  }
+  const key = process.env.RESEND_API_KEY;
+  if (!key) {
+    if (process.env.NODE_ENV === 'production') throw new Error('Email service is not configured');
+    console.log('[Auth] DEV verification code for ' + to + ': ' + code); return;
+  }
+  const from = process.env.EMAIL_FROM || 'Deemona AI Finance OS <onboarding@resend.dev>';
+  const r = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      from, to: [to], subject: 'Your Deemona verification code: ' + code,
+      html: '<div style="font-family:Arial,sans-serif;max-width:480px"><h2>Verify your email</h2><p>Use this code to finish creating your Deemona AI Finance OS account:</p><p style="font-size:32px;font-weight:700;letter-spacing:8px">' + code + '</p><p>It expires in ' + CODE_MINUTES + ' minutes. If you did not request it, ignore this email.</p></div>',
+    }),
+  });
+  if (!r.ok) throw new Error('Could not send the verification email');
+}
+// Checks and consumes the code. Wrong guesses are counted (and persisted) so codes cannot be brute-forced.
+async function consumeEmailCode(pool: Pool, email: string, code: string): Promise<string | null> {
+  await ensureVerifyTable(pool);
+  if (!/^\d{6}$/.test(code)) return 'Enter the 6-digit verification code sent to your email';
+  const r = await pool.query('SELECT * FROM email_verifications WHERE email = $1', [email]);
+  const row = r.rows[0];
+  if (!row) return 'Please request a verification code first';
+  if (new Date(row.expires_at).getTime() < Date.now()) return 'The code has expired. Please request a new one';
+  if (row.attempts >= MAX_ATTEMPTS) return 'Too many wrong attempts. Please request a new code';
+  const given = Buffer.from(hashCode(email, code));
+  const want = Buffer.from(row.code_hash);
+  const same = given.length === want.length && nodeCrypto.timingSafeEqual(given, want);
+  if (!same) {
+    await pool.query('UPDATE email_verifications SET attempts = attempts + 1 WHERE email = $1', [email]);
+    return 'Incorrect code';
+  }
+  await pool.query('DELETE FROM email_verifications WHERE email = $1', [email]);
+  return null;
+}
 const TERMS_REQUIRED_MSG = 'You must accept the Terms of Service, Privacy Policy and Acceptable Use Policy to create an account';
 
 function generateToken(user: any, tenant: any): string {
@@ -47,6 +134,7 @@ async function verifyGoogleToken(idToken: string): Promise<{ sub: string; email:
     if (!res.ok) return null;
     const data = await res.json() as any;
     if (data.aud !== GOOGLE_CLIENT_ID) return null;
+    if (data.email_verified !== 'true' && data.email_verified !== true) return null;
     return { sub: data.sub, email: data.email, name: data.name, picture: data.picture, given_name: data.given_name, family_name: data.family_name };
   } catch { return null; }
 }
@@ -57,10 +145,47 @@ export function createAuthRouter(pool: Pool): Router {
 
   // â”€â”€ POST /api/auth/register â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // Returns success:true â€” client must redirect to login
+  // ── POST /api/auth/register/send-code ── (no account is created here)
+  router.post('/register/send-code', async (req: Request, res: Response) => {
+    try {
+      const email = String(req.body?.email || '').trim().toLowerCase();
+      if (req.body?.website) { res.json({ success: true }); return; } // honeypot field: bots fill it, people never see it
+      if (!validEmail(email)) { res.status(400).json({ error: 'Enter a valid email address' }); return; }
+      if (!ipAllowed(clientIp(req))) { res.status(429).json({ error: 'Too many requests. Please try again later' }); return; }
+      await ensureVerifyTable(pool);
+      const exists = await pool.query('SELECT 1 FROM users WHERE email = $1', [email]);
+      if (exists.rows.length) { res.status(409).json({ error: 'Email already registered. Please sign in.' }); return; }
+      const prev = (await pool.query('SELECT * FROM email_verifications WHERE email = $1', [email])).rows[0];
+      let sentCount = 1; let windowStart = new Date();
+      if (prev) {
+        const sinceLast = (Date.now() - new Date(prev.last_sent_at).getTime()) / 1000;
+        if (sinceLast < RESEND_COOLDOWN_SEC) { res.status(429).json({ error: 'Please wait ' + Math.ceil(RESEND_COOLDOWN_SEC - sinceLast) + ' seconds before requesting another code' }); return; }
+        const inWindow = Date.now() - new Date(prev.window_start).getTime() < 3600000;
+        if (inWindow) { if (prev.sent_count >= MAX_CODES_PER_HOUR) { res.status(429).json({ error: 'Too many codes requested. Please try again in an hour' }); return; } sentCount = prev.sent_count + 1; windowStart = new Date(prev.window_start); }
+      }
+      const code = String(nodeCrypto.randomInt(100000, 1000000));
+      await pool.query(
+        `INSERT INTO email_verifications (email, code_hash, expires_at, attempts, sent_count, window_start, last_sent_at)
+         VALUES ($1,$2, NOW() + ($3 || ' minutes')::interval, 0, $4, $5, NOW())
+         ON CONFLICT (email) DO UPDATE SET code_hash = EXCLUDED.code_hash, expires_at = EXCLUDED.expires_at, attempts = 0,
+           sent_count = EXCLUDED.sent_count, window_start = EXCLUDED.window_start, last_sent_at = NOW()`,
+        [email, hashCode(email, code), String(CODE_MINUTES), sentCount, windowStart]
+      );
+      await sendVerificationEmail(email, code);
+      res.json({ success: true, message: 'Verification code sent', expires_in_minutes: CODE_MINUTES });
+    } catch (err) {
+      console.error('[Auth] send-code error:', err);
+      res.status(502).json({ error: 'Could not send the verification email. Please try again shortly.' });
+    }
+  });
+
   router.post('/register', async (req: Request, res: Response) => {
     const client = await pool.connect();
     try {
       await ensureConsentColumns(pool);
+      if (req.body?.accepted_terms !== true) { res.status(400).json({ error: TERMS_REQUIRED_MSG }); return; }
+      const codeErr = await consumeEmailCode(pool, String(req.body?.email || '').trim().toLowerCase(), String(req.body?.email_otp || ''));
+      if (codeErr) { res.status(400).json({ error: codeErr }); return; }
       await client.query('BEGIN');
       const { company_name, industry, gstin, first_name, last_name, email, password, accepted_terms, terms_version } = req.body;
       if (!company_name || !email || !password || !first_name) {
