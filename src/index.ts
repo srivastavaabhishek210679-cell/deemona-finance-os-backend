@@ -366,19 +366,23 @@ start().catch(err => {
 let _reportSchedCache: { at: number; rows: any[] } = { at: 0, rows: [] };
 async function getReportSchedules(): Promise<{ rows: any[] }> {
   if (Date.now() - _reportSchedCache.at > 600000) {
-    const r: any = await pool.query("SELECT tenant_id, setting_key, setting_value FROM monitor_settings WHERE setting_key LIKE 'report_schedule_%'").catch(() => null);
+    const r: any = await pool.query("SELECT tenant_id, 'report_schedule_' || report_type AS setting_key, config AS setting_value FROM report_schedules").catch(() => null);
     _reportSchedCache = { at: Date.now(), rows: r ? r.rows : _reportSchedCache.rows };
   }
   return { rows: _reportSchedCache.rows };
 }
 
+// A saved schedule is picked up straight away (no waiting for the 10-minute refresh).
+import('./routes/eventBusRoutes').then(m => { m.reportScheduleListeners.push(() => { _reportSchedCache.at = 0; }); }).catch(() => {});
+
 // Auto Report Scheduler - runs every minute
 cron.schedule('* * * * *', async () => {
   try {
     const now = new Date();
-    const currentTime = now.getHours().toString().padStart(2,'0') + ':' + now.getMinutes().toString().padStart(2,'0');
-    const currentDay = now.getDay();
-    const currentDate = now.getDate();
+    const ist = new Date(Date.now() + 330 * 60000); // India time (the server clock is UTC)
+    const currentTime = ist.getUTCHours().toString().padStart(2,'0') + ':' + ist.getUTCMinutes().toString().padStart(2,'0');
+    const currentDay = ist.getUTCDay();
+    const currentDate = ist.getUTCDate();
     const result = await getReportSchedules();
     for (const row of result.rows) {
       try {
@@ -390,14 +394,22 @@ cron.schedule('* * * * *', async () => {
         if (!shouldRun) continue;
         const { REPORT_REGISTRY } = await import('./routes/reportEngine');
         const registry = REPORT_REGISTRY[row.setting_key.replace('report_schedule_', '')];
-        if (!registry) continue;
-        const { subject, html } = await registry.fn(pool, row.tenant_id, sched.threshold || 100000);
+        let rep: { subject: string; html: string; label: string } | null = null;
+        if (registry) { const r0 = await registry.fn(pool, row.tenant_id, sched.threshold || 100000); rep = { subject: r0.subject, html: r0.html, label: registry.label }; }
+        else {
+          const { runEventBusReport } = await import('./routes/eventBusRoutes');
+          const rtype = row.setting_key.replace('report_schedule_', '');
+          const r1 = await runEventBusReport(pool, row.tenant_id, rtype);
+          if (r1) rep = { subject: r1.subject, html: r1.html, label: rtype };
+        }
+        if (!rep) continue;
+        const { subject, html } = rep;
         const { Resend } = await import('resend');
         const resend = new Resend(process.env.RESEND_API_KEY);
         const { error } = await resend.emails.send({ from: 'Deemona Finance OS <onboarding@resend.dev>', to: sched.email, subject, html });
         if (!error) {
-          await pool.query("INSERT INTO automation_logs (tenant_id, automation_type, status, detail, created_at) VALUES ($1, $2, $3, $4, NOW())", [row.tenant_id, 'SCHEDULED_REPORT', 'success', registry.label + ' auto-sent to ' + sched.email]).catch(() => {});
-          console.log('[Cron] Sent:', registry.label, 'to', sched.email);
+          await pool.query("INSERT INTO automation_logs (tenant_id, automation_type, status, detail, created_at) VALUES ($1, $2, $3, $4, NOW())", [row.tenant_id, 'SCHEDULED_REPORT', 'success', rep.label + ' auto-sent to ' + sched.email]).catch(() => {});
+          console.log('[Cron] Sent:', rep.label, 'to', sched.email);
         }
       } catch(e) { console.error('[Cron] Error:', e); }
     }

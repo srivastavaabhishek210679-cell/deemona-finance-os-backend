@@ -423,13 +423,20 @@ export function createEventBusRouter(pool: Pool): Router {
         return res.status(400).json({ error: 'Missing required fields' }) as any;
       }
 
-      // Save to DB
-      await pool.query(`
-        INSERT INTO monitor_settings (tenant_id, setting_key, setting_value, updated_at)
-        VALUES ($1, $2, $3, NOW())
-        ON CONFLICT (tenant_id, setting_key) DO UPDATE SET setting_value=EXCLUDED.setting_value, updated_at=NOW()`,
-        [tenantId, `report_schedule_${reportType}`, JSON.stringify({ email, frequency, time, dayOfWeek, enabled: true })]
-      ).catch(() => {});
+      // Save to DB (own table; a failure is reported, not hidden)
+      const hhmm = String(time || '08:00').match(/^(\d{1,2}):(\d{2})$/);
+      if (!hhmm || +hhmm[1] > 23 || +hhmm[2] > 59 || !/^[a-z0-9_]{1,60}$/.test(String(reportType)) ||
+          !['daily', 'weekly', 'monthly'].includes(frequency) || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(email))) {
+        return res.status(400).json({ error: 'Check the report type, frequency (daily/weekly/monthly), time (HH:MM) and email.' }) as any;
+      }
+      const timeNorm = hhmm[1].padStart(2, '0') + ':' + hhmm[2];
+      await ensureReportSchedulesTable(pool);
+      await pool.query(
+        `INSERT INTO report_schedules (tenant_id, report_type, config, updated_at) VALUES ($1,$2,$3,NOW())
+         ON CONFLICT (tenant_id, report_type) DO UPDATE SET config=EXCLUDED.config, updated_at=NOW()`,
+        [tenantId, String(reportType), JSON.stringify({ email, frequency, time: timeNorm, dayOfWeek, enabled: true })]
+      );
+      reportScheduleListeners.forEach(f => { try { f(); } catch {} }); // tell the scheduler to reload now
 
       // Add to in-memory schedule
       if (!reportSchedules.has(tenantId)) reportSchedules.set(tenantId, []);
@@ -449,7 +456,7 @@ export function createEventBusRouter(pool: Pool): Router {
     try {
       const tenantId = tid(req);
       const rows = await pool.query(
-        `SELECT setting_key, setting_value FROM monitor_settings WHERE tenant_id=$1 AND setting_key LIKE 'report_schedule_%'`,
+        `SELECT report_type AS setting_key, config AS setting_value FROM report_schedules WHERE tenant_id=$1`,
         [tenantId]
       ).catch(() => ({ rows: [] }));
 
@@ -499,6 +506,10 @@ export function createEventBusRouter(pool: Pool): Router {
     const currentDay = now.getDay();
     let sent = 0;
 
+    // Report schedules are now sent by the built-in scheduler in index.ts (table report_schedules).
+    const handledByBuiltInScheduler = true as boolean;
+    if (handledByBuiltInScheduler) { res.json({ success: true, sent: 0, note: 'handled by the built-in scheduler' }); return; }
+
     for (const [tenantId, schedules] of reportSchedules.entries()) {
       for (const schedule of schedules.filter(s => s.enabled)) {
         const shouldRun =
@@ -527,3 +538,19 @@ export function createEventBusRouter(pool: Pool): Router {
 
 // Export broadcast function for use in other routes
 export { broadcastToTenant };
+
+export const reportScheduleListeners: Array<() => void> = [];
+
+export async function ensureReportSchedulesTable(pool: Pool): Promise<void> {
+  await pool.query(`CREATE TABLE IF NOT EXISTS report_schedules (
+    tenant_id UUID NOT NULL, report_type TEXT NOT NULL, config TEXT NOT NULL, updated_at TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (tenant_id, report_type))`);
+}
+
+// The two reports that live in this file, for the built-in scheduler in index.ts.
+export async function runEventBusReport(pool: Pool, tenantId: string, reportType: string): Promise<{ subject: string; html: string } | null> {
+  const d = new Date().toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' });
+  if (reportType === 'ar_aging') return { subject: `Daily AR Aging Report - ${d}`, html: await generateARAgingReport(pool, tenantId) };
+  if (reportType === 'weekly_pl') return { subject: `Weekly P&L Report - ${d}`, html: await generateWeeklyPLReport(pool, tenantId) };
+  return null;
+}
