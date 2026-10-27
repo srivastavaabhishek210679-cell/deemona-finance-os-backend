@@ -5,6 +5,7 @@ import { createUniversalPollerRouter, startUniversalPoller } from './routes/univ
 import { createSSERouter, setupCDC } from './routes/sseRoutes';
 import { startCfoSnapshotJob } from './services/cfoMetrics';
 import { startCfoProactiveJob } from './services/cfoProactive';
+import { startScheduledReports } from './jobs/scheduledReports';
 dotenv.config();
 
 import express from 'express';
@@ -222,6 +223,7 @@ app.post('/api/brief', async (req: express.Request, res: express.Response) => {
   setupCDC(pool);
   startCfoSnapshotJob(pool);
   startCfoProactiveJob(pool);
+  startScheduledReports(pool);
 app.use('/api/stream', createSSERouter(pool));
   app.use('/api/poller', createUniversalPollerRouter(pool));
   app.use('/api/stream-connections', createMessageStreamRouter(pool));
