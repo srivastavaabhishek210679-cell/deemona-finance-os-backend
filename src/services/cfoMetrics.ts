@@ -768,6 +768,23 @@ export const METRICS: Record<string, Metric> = {
     },
   },
 
+  open_alerts: {
+    description: 'Open proactive alerts ("AI asks") the system has raised on its own from threshold rules: severity, what was detected, the question for the CFO, and when first raised. Use for "what needs my attention", "what should I know", "any red flags".',
+    input_schema: { type: 'object', properties: { include_acknowledged: { type: 'boolean', description: 'Also list alerts already acknowledged. Default false.' } } },
+    async run(pool, t, input) {
+      const statuses = input?.include_acknowledged ? ['open', 'acknowledged'] : ['open'];
+      let list: any[];
+      try {
+        list = await rows(pool, `SELECT severity, title, detail, ask, status, first_raised_at::text AS first_raised_at FROM cfo_alerts
+                                 WHERE tenant_id=$1 AND status = ANY($2::text[])
+                                 ORDER BY CASE severity WHEN 'critical' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END, first_raised_at ASC LIMIT 25`, [t, statuses]);
+      } catch { return needsData(['proactive alert scan'], 'The alert scan has not run yet for this company (it runs hourly once Step 3 is deployed).'); }
+      const bySeverity: Record<string, number> = {}; list.forEach(a => { bySeverity[a.severity] = (bySeverity[a.severity] || 0) + 1; });
+      return { open_count: list.length, by_severity: bySeverity, alerts: list,
+        note: 'Alerts come from fixed threshold rules checked hourly; a missing alert means a rule did not trigger, not that the area was reviewed.' };
+    },
+  },
+
   forecast_vs_actual: {
     description: 'Compares the saved forecast for a month with actual (or month-to-date projected) revenue, cash received or cash paid. Uses the CFO\'s manual forecast if one was entered, otherwise the system baseline (trailing 3-month average) saved when the month was first seen. Use for "are we ahead or behind forecast".',
     input_schema: { type: 'object', properties: {

@@ -4,6 +4,7 @@ import { createMessageStreamRouter } from './routes/messageStreamRoutes';
 import { createUniversalPollerRouter, startUniversalPoller } from './routes/universalPollerRoutes';
 import { createSSERouter, setupCDC } from './routes/sseRoutes';
 import { startCfoSnapshotJob } from './services/cfoMetrics';
+import { startCfoProactiveJob } from './services/cfoProactive';
 dotenv.config();
 
 import express from 'express';
@@ -31,6 +32,7 @@ import { createCRMRouter } from './routes/crmRoutes';
 import { createStatementsRouter } from './routes/statementsRoutes';
 import { createCFOAgentRouter } from './routes/cfoAgentRoutes';
 import { createCfoSetupRouter } from './routes/cfoSetupRoutes';
+import { createCfoProactiveRouter } from './routes/cfoProactiveRoutes';
 import { createDocumentAIRouter } from './routes/documentAIRoutes';
 import { createAutomationRouter } from './routes/automationRoutes';
 import { createTaxAgentRouter } from './routes/taxAgentRoutes';
@@ -127,6 +129,7 @@ app.use('/api/crm',        createCRMRouter(pool));
 app.use('/api/statements',  createStatementsRouter(pool));
 app.use('/api/cfo',         createCFOAgentRouter(pool));
 app.use('/api/cfo-setup', createCfoSetupRouter(pool));
+app.use('/api/cfo-proactive', createCfoProactiveRouter(pool));
 app.use('/api/document-ai', createDocumentAIRouter(pool));
 app.use('/api/automation',  createAutomationRouter(pool));
 app.use('/api/tax-agent',   createTaxAgentRouter(pool));
@@ -218,6 +221,7 @@ app.post('/api/brief', async (req: express.Request, res: express.Response) => {
 
   setupCDC(pool);
   startCfoSnapshotJob(pool);
+  startCfoProactiveJob(pool);
 app.use('/api/stream', createSSERouter(pool));
   app.use('/api/poller', createUniversalPollerRouter(pool));
   app.use('/api/stream-connections', createMessageStreamRouter(pool));
