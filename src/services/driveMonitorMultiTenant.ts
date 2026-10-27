@@ -9,6 +9,11 @@ import Anthropic from '@anthropic-ai/sdk';
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
+// Cost control: remember what was last logged/written so an idle folder costs almost no database work.
+const lastFound = new Map<string, number>();
+const lastTouch = new Map<string, number>();
+let lastLogCleanup = 0;
+
 const FINANCIAL_EXTS = ['.xlsx', '.xls', '.csv', '.pdf', '.xlsm'];
 const MONTH_PATTERNS = ['monthly','month','mtd'];
 const WEEK_PATTERNS  = ['weekly','week','wk'];
@@ -228,7 +233,10 @@ async function monitorTenant(pool: Pool, settings: TenantSettings, priorReportsC
 
     // List Drive files
     const files = await listDriveFiles(settings.folder_id, settings.google_api_key);
-    await logToDb(pool, tid, 'info', `Found ${files.length} files in Drive folder`);
+    if (lastFound.get(tid) !== files.length) {
+      lastFound.set(tid, files.length);
+      await logToDb(pool, tid, 'info', `Found ${files.length} files in Drive folder`);
+    }
 
     // Filter new financial files
     const newFiles = files.filter((f: any) => {
@@ -239,7 +247,10 @@ async function monitorTenant(pool: Pool, settings: TenantSettings, priorReportsC
     });
 
     if (newFiles.length === 0) {
-      await pool.query('UPDATE monitor_settings SET last_checked_at=NOW() WHERE tenant_id=$1', [tid]);
+      if (Date.now() - (lastTouch.get(tid) || 0) > 30 * 60 * 1000) {
+        lastTouch.set(tid, Date.now());
+        await pool.query('UPDATE monitor_settings SET last_checked_at=NOW() WHERE tenant_id=$1', [tid]);
+      }
       return;
     }
 
@@ -315,6 +326,10 @@ export async function startMultiTenantMonitor(pool: Pool): Promise<void> {
   // Main loop
   while (true) {
     cycle++;
+    if (Date.now() - lastLogCleanup > 24 * 3600 * 1000) {
+      lastLogCleanup = Date.now();
+      await pool.query("DELETE FROM monitor_logs WHERE created_at < NOW() - INTERVAL '30 days'").catch(() => {});
+    }
     try {
       // Load all enabled tenants
       const result = await pool.query(
@@ -348,7 +363,8 @@ export async function startMultiTenantMonitor(pool: Pool): Promise<void> {
       console.error('[Monitor] Outer loop error:', e);
     }
 
-    const interval = parseInt(process.env.MONITOR_SLEEP_SECONDS || '60');
+    // Cost control: default every 10 minutes, never faster than every 2 minutes.
+    const interval = Math.max(120, parseInt(process.env.MONITOR_SLEEP_SECONDS || '600') || 600);
     await new Promise(r => setTimeout(r, interval * 1000));
   }
 }
