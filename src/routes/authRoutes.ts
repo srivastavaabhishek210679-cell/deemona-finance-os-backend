@@ -65,7 +65,7 @@ async function sendVerificationEmail(to: string, code: string): Promise<void> {
     const port = Number(process.env.SMTP_PORT) || 587;
     const user = process.env.SMTP_USER || '';
     const tx = nodemailer.createTransport({
-      host: process.env.SMTP_HOST, port,
+      host: process.env.SMTP_HOST, port, family: 4,
       secure: port === 465 || process.env.SMTP_SECURE === 'true',
       auth: user ? { user, pass: process.env.SMTP_PASS || '' } : undefined,
       connectionTimeout: 10000, greetingTimeout: 10000, socketTimeout: 15000,
