@@ -453,6 +453,19 @@ export async function generateBrief(pool: Pool, t: string, cadence: Cadence, sou
   return r.rows[0];
 }
 
+/** A company with no invoices, bills, bank lines or expenses has nothing to brief on: skip it (no AI cost). Re-checked every 6 hours. */
+const noDataSince = new Map<string, number>();
+async function tenantHasFinancialData(pool: Pool, t: string): Promise<boolean> {
+  const skipped = noDataSince.get(t);
+  if (skipped && Date.now() - skipped < 6 * 3600_000) return false;
+  for (const table of ['ar_invoices', 'ap_invoices', 'bank_transactions', 'expenses']) {
+    const r = await pool.query(`SELECT 1 FROM ${table} WHERE tenant_id=$1 LIMIT 1`, [t]).catch(() => null);
+    if (r && r.rowCount) { noDataSince.delete(t); return true; }
+  }
+  noDataSince.set(t, Date.now());
+  return false;
+}
+
 /** Generates whichever scheduled briefs are due for this tenant and not yet written. Catches up if the server was down at the scheduled hour. */
 export async function runDueBriefs(pool: Pool, t: string): Promise<string[]> {
   const s = await getBriefSettings(pool, t);
@@ -465,6 +478,7 @@ export async function runDueBriefs(pool: Pool, t: string): Promise<string[]> {
     if (!due) continue;
     const exists = (await pool.query(`SELECT 1 FROM cfo_briefs WHERE tenant_id=$1 AND cadence=$2 AND period_label=$3`, [t, c, label])).rowCount;
     if (exists) continue;
+    if (!(await tenantHasFinancialData(pool, t))) break;   // nothing to brief on yet
     try { await generateBrief(pool, t, c, 'schedule'); made.push(c); } catch (e) { console.error('[CFO brief]', t, c, String(e)); }
   }
   return made;
