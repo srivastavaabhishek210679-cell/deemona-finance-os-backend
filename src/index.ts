@@ -244,7 +244,16 @@ app.use((err: Error, _req: express.Request, res: express.Response, _next: expres
 // ── Cron jobs ─────────────────────────────────────────────────
 function registerCronJobs() {
   // Every 30 seconds — generate embeddings for new memories
-  cron.schedule('*/30 * * * * *', () => processEmbeddingQueue(pool));
+  cron.schedule('*/5 * * * *', async () => {
+    const EMBED_PASSES = 5; // drain a backlog in one visit instead of waking the database every 30 s
+    try {
+      for (let i = 0; i < EMBED_PASSES; i++) {
+        const n: any = await processEmbeddingQueue(pool);
+        const done = typeof n === 'number' ? n : n?.processed;
+        if (!(done > 0)) break;
+      }
+    } catch (e) { console.error('[Memory] embedding queue error:', e); }
+  });
 
   // Every 6 hours — refresh AI summaries for vendors/customers
   cron.schedule('0 */6 * * *', () => refreshEntityProfiles(pool));
@@ -352,6 +361,17 @@ start().catch(err => {
 });
 
 
+// Cost control: report schedules are read from the database at most every 10 minutes;
+// the every-minute tick below then runs from memory and no longer wakes the database.
+let _reportSchedCache: { at: number; rows: any[] } = { at: 0, rows: [] };
+async function getReportSchedules(): Promise<{ rows: any[] }> {
+  if (Date.now() - _reportSchedCache.at > 600000) {
+    const r: any = await pool.query("SELECT tenant_id, setting_key, setting_value FROM monitor_settings WHERE setting_key LIKE 'report_schedule_%'").catch(() => null);
+    _reportSchedCache = { at: Date.now(), rows: r ? r.rows : _reportSchedCache.rows };
+  }
+  return { rows: _reportSchedCache.rows };
+}
+
 // Auto Report Scheduler - runs every minute
 cron.schedule('* * * * *', async () => {
   try {
@@ -359,7 +379,7 @@ cron.schedule('* * * * *', async () => {
     const currentTime = now.getHours().toString().padStart(2,'0') + ':' + now.getMinutes().toString().padStart(2,'0');
     const currentDay = now.getDay();
     const currentDate = now.getDate();
-    const result = await pool.query("SELECT tenant_id, setting_key, setting_value FROM monitor_settings WHERE setting_key LIKE 'report_schedule_%'").catch(() => ({ rows: [] }));
+    const result = await getReportSchedules();
     for (const row of result.rows) {
       try {
         const sched = JSON.parse(row.setting_value || '{}');
