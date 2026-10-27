@@ -70,6 +70,37 @@ async function emailTenant(pool: Pool, tenantId: string, subject: string, html: 
     console.log('[Reports] emailed', subject, '→', to);
   } catch (e) { console.error('[Reports] email failed:', String(e)); }
 }
+/** Turns the model's markdown (headings, bold, bullets, numbered lists, tables, rules) into safe email HTML. Everything is escaped first. */
+export function mdToHtml(src: string): string {
+  const lines = String(src ?? '').split('\n'); const out: string[] = []; let list: 'ul' | 'ol' | null = null;
+  const inl = (s: string): string => esc(s).replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  const close = (): void => { if (list) { out.push(`</${list}>`); list = null; } };
+  const cells = (l: string): string[] => l.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(c => c.trim());
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i].trimEnd();
+    if (/^\s*\|.*\|\s*$/.test(l)) {
+      close(); const block: string[] = [];
+      while (i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i])) { block.push(lines[i]); i++; }
+      i--;
+      const rows = block.filter(r => !cells(r).every(c => /^:?-{2,}:?$/.test(c))).map(cells);
+      out.push('<table style="border-collapse:collapse;margin:8px 0;font-size:13px">' + rows.map((r, ri) =>
+        '<tr>' + r.map(c => `<${ri === 0 ? 'th' : 'td'} style="border:1px solid #e2e8f0;padding:5px 9px;text-align:left${ri === 0 ? ';background:#f8fafc' : ''}">${inl(c)}</${ri === 0 ? 'th' : 'td'}>`).join('') + '</tr>').join('') + '</table>');
+      continue;
+    }
+    const h = l.match(/^(#{1,4})\s+(.*)$/), ul = l.match(/^\s*[-*•]\s+(.*)$/), ol = l.match(/^\s*\d+[.)]\s+(.*)$/);
+    if (/^\s*(-{3,}|\*{3,}|_{3,})\s*$/.test(l)) { close(); out.push('<hr style="border:0;border-top:1px solid #e2e8f0;margin:12px 0">'); }
+    else if (h) { close(); out.push(`<h3 style="margin:14px 0 4px;font-size:${h[1].length <= 2 ? '16' : '14'}px;color:#0f172a">${inl(h[2])}</h3>`); }
+    else if (ul || ol) {
+      const kind = ul ? 'ul' : 'ol';
+      if (list !== kind) { close(); out.push(`<${kind} style="margin:4px 0 8px;padding-left:20px">`); list = kind; }
+      out.push(`<li style="margin-bottom:3px">${inl((ul || ol)![1])}</li>`);
+    }
+    else if (!l.trim()) close();
+    else { close(); out.push(`<p style="margin:4px 0 8px">${inl(l)}</p>`); }
+  }
+  close(); return out.join('');
+}
+
 const wrap = (title: string, color: string, inner: string): string =>
   `<html><body style="font-family:Arial;padding:20px;max-width:640px"><h2 style="color:${color}">${esc(title)}</h2>${inner}` +
   `<p style="color:#64748b;font-size:12px;margin-top:20px">Automatic report from Deemona AI Finance OS</p></body></html>`;
@@ -83,7 +114,7 @@ export const JOBS: Job[] = [
       const content = r.json?.insight?.content;
       if (!r.ok || !content) { console.error('[Reports] insights failed', r.status, JSON.stringify(r.json).slice(0, 200)); return false; }
       await emailTenant(pool, t, `📊 Daily AI Financial Summary — ${todayLabel(istNow())}`,
-        wrap('Daily AI Financial Summary', '#1d4ed8', `<div style="background:#f8faff;border-left:4px solid #1d4ed8;padding:16px;border-radius:4px;line-height:1.6">${esc(content).replace(/\n/g, '<br>')}</div>`));
+        wrap('Daily AI Financial Summary', '#1d4ed8', `<div style="background:#f8faff;border-left:4px solid #1d4ed8;padding:12px 16px;border-radius:4px;line-height:1.55">${mdToHtml(content)}</div>`));
       return true;
     },
   },
