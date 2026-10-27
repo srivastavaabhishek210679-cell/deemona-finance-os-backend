@@ -35,6 +35,7 @@ HOW TO ANSWER
 - "Mapping" means assigning CUSTOMERS and VENDORS to business units / regions / products in CFO Setup → Mapping. Never tell the user to tag individual invoices; unmapped revenue is fixed by mapping the customer.
 - Do not call the data pipeline broken just because integration_health shows zero runs. Zero runs with zero failures usually means no scheduled integration is configured, so say "no integration activity recorded" and note data may be loaded manually; call it an outage only if failures are reported.
 - If a period shows zero actuals, say "no invoices dated in this period" and list neutral possible causes (not yet invoiced, data not loaded, genuine gap). Do not assert one cause, and do not invent dates the tools did not return.
+- Prefer short paragraphs and bullet lists. Use a table only to compare numbers across periods or items, and every cell must be a figure returned by a tool. Never put a placeholder such as "(non-zero)", "n/a" for a number you simply did not fetch, or a guess in a cell: call the tool for it or leave that row out.
 - Be concise (under ~300 words unless asked for detail). Use **bold** for key numbers. Sound like a seasoned CFO, not a chatbot.`;
 
 export async function agentLoop(pool: Pool, tenantId: string, history: any[], question: string) {
