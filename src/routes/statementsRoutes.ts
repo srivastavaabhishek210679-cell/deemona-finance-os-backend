@@ -232,36 +232,21 @@ export function createStatementsRouter(pool: Pool): Router {
       const fromDate = from as string || new Date(new Date().getFullYear(), 3, 1).toISOString().split('T')[0];
       const toDate   = to as string   || new Date().toISOString().split('T')[0];
 
-      // Operating: customer receipts and vendor payments
+      // Operating: customer receipts and vendor payments (recorded payment events). /*cfs-events*/
+      await ensurePaymentEventsTable(pool);
       const receipts = await pool.query(`
-        SELECT COALESCE(SUM(amount), 0) as total
-        FROM bank_transactions
-        WHERE tenant_id = $1 AND type = 'credit'
-        AND category = 'customer_receipt'
-        AND date BETWEEN $2 AND $3
+        SELECT COALESCE(SUM(amount), 0) as total FROM invoice_payment_events
+        WHERE tenant_id = $1 AND invoice_type = 'ar' AND payment_date BETWEEN $2 AND $3
       `, [tenantId, fromDate, toDate]);
 
       const payments = await pool.query(`
-        SELECT COALESCE(SUM(amount), 0) as total
-        FROM bank_transactions
-        WHERE tenant_id = $1 AND type = 'debit'
-        AND category IN ('vendor_payment', 'salary', 'tax_payment', 'utilities', 'rent')
-        AND date BETWEEN $2 AND $3
+        SELECT COALESCE(SUM(amount), 0) as total FROM invoice_payment_events
+        WHERE tenant_id = $1 AND invoice_type = 'ap' AND payment_date BETWEEN $2 AND $3
       `, [tenantId, fromDate, toDate]);
 
-      const salaries = await pool.query(`
-        SELECT COALESCE(SUM(amount), 0) as total
-        FROM bank_transactions
-        WHERE tenant_id = $1 AND type = 'debit'
-        AND category = 'salary' AND date BETWEEN $2 AND $3
-      `, [tenantId, fromDate, toDate]);
-
-      const taxes = await pool.query(`
-        SELECT COALESCE(SUM(amount), 0) as total
-        FROM bank_transactions
-        WHERE tenant_id = $1 AND type = 'debit'
-        AND category = 'tax_payment' AND date BETWEEN $2 AND $3
-      `, [tenantId, fromDate, toDate]);
+      // Salaries and taxes paid are not recorded as dated payments yet.
+      const salaries = { rows: [{ total: '0' }] };
+      const taxes = { rows: [{ total: '0' }] };
 
       // Investing: asset purchases
       const assetPurchases = await pool.query(`
@@ -270,16 +255,12 @@ export function createStatementsRouter(pool: Pool): Router {
         WHERE tenant_id = $1 AND purchase_date BETWEEN $2 AND $3
       `, [tenantId, fromDate, toDate]);
 
-      // Financing: opening and closing bank balance
-      const openingBal = await pool.query(`
-        SELECT COALESCE(SUM(opening_balance), 0) as total
-        FROM bank_accounts WHERE tenant_id = $1 AND is_active = TRUE
-      `, [tenantId]);
-
-      const closingBal = await pool.query(`
-        SELECT COALESCE(SUM(current_balance), 0) as total
-        FROM bank_accounts WHERE tenant_id = $1 AND is_active = TRUE
-      `, [tenantId]);
+      // Opening and closing cash come from the manual cash balance plus recorded receipts and payments.
+      const dayBefore = new Date(new Date(fromDate + 'T00:00:00Z').getTime() - 86400000).toISOString().split('T')[0];
+      const cOpen = await cashAsOf(pool, tenantId, dayBefore);
+      const cClose = await cashAsOf(pool, tenantId, toDate);
+      const openingBal = { rows: [{ total: String(cOpen.amount) }] };
+      const closingBal = { rows: [{ total: String(cClose.amount) }] };
 
       const operatingInflow  = parseFloat(receipts.rows[0].total);
       const operatingOutflow = parseFloat(payments.rows[0].total);
