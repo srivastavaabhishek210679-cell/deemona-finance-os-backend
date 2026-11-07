@@ -48,26 +48,44 @@ const FORECAST_TOOL = {
     ap_delay_days: { type: 'integer', description: 'Extra days the company takes to pay suppliers (custom case).' },
     monthly_outflow: { type: 'number', description: 'Other monthly costs not in bills, e.g. salaries, in INR.' },
     monthly_inflow: { type: 'number', description: 'New monthly sales not yet invoiced, in INR.' },
+    customer_name: { type: 'string', description: 'Delay only this customer (case-insensitive name match). Use this, with customer_delay_days, for questions about ONE customer. ar_delay_days delays EVERY customer.' },
+    customer_delay_days: { type: 'integer', description: 'Extra days that customer takes to pay, 0-180. Used with customer_name.' },
   } },
 };
 const cl = (v: any, d: number, lo: number, hi: number) => { const n = Number(v); return v === undefined || v === null || !Number.isFinite(n) ? d : Math.max(lo, Math.min(hi, n)); };
 async function runForecastTool(pool: Pool, tenantId: string, input: any) {
   const custom: FcOpts = { days: cl(input?.days, 90, 7, 365), ar_delay_days: cl(input?.ar_delay_days, 0, 0, 180), collection_pct: cl(input?.collection_pct, 100, 0, 100), ap_delay_days: cl(input?.ap_delay_days, 0, 0, 180), monthly_inflow: cl(input?.monthly_inflow, 0, 0, 1e11), monthly_outflow: cl(input?.monthly_outflow, 0, 0, 1e11) };
   const { opening, items, today } = await loadForecastInputs(pool, tenantId);
-  const cases: Array<[string, FcOpts]> = [
-    ['As booked', { ...custom, ar_delay_days: 0, collection_pct: 100, ap_delay_days: 0 }],
-    ['Customers pay 30 days late', { ...custom, ar_delay_days: 30, collection_pct: 100, ap_delay_days: 0 }],
-  ];
-  if (custom.ar_delay_days !== 0 || custom.collection_pct !== 100 || custom.ap_delay_days !== 0) if (!(custom.ar_delay_days === 30 && custom.collection_pct === 100 && custom.ap_delay_days === 0)) cases.push(['Custom case', custom]);
   const recv = items.filter(i => i.kind === 'in');
+  // One-customer delay: shift only that customer's open invoices (overdue ones count from the usual 7-day assumption).
+  const custName = String(input?.customer_name || '').trim().toLowerCase();
+  const custDelay = cl(input?.customer_delay_days, 0, 0, 180);
+  let customerNote: any = null;
+  let customItems = items;
+  if (custName) {
+    const hit = recv.filter(i => (i.party || '').toLowerCase().includes(custName));
+    if (!hit.length) return { error: 'No open receivable found for a customer matching "' + input.customer_name + '". Open receivables are from: ' + Array.from(new Set(recv.map(i => i.party))).join(', ') };
+    const addDays = (s: string, n: number) => new Date(new Date(s + 'T00:00:00Z').getTime() + n * 86400000).toISOString().slice(0, 10);
+    customItems = items.map(i => (hit.includes(i) ? { ...i, due: addDays(i.overdue ? addDays(today, 7) : i.due, custDelay), overdue: false } : i));
+    customerNote = { customer_delayed: hit[0].party, invoices_delayed: hit.length, amount_delayed_inr: inrText(hit.reduce((a, i) => a + i.amount, 0)), extra_days: custDelay, only_this_customer_is_delayed: true };
+  }
+  const base: FcOpts = { ...custom, ar_delay_days: 0, collection_pct: 100, ap_delay_days: 0 };
+  const cases: Array<[string, FcOpts, typeof items]> = [
+    ['As booked', base, items],
+    ['All customers pay 30 days late', { ...custom, ar_delay_days: 30, collection_pct: 100, ap_delay_days: 0 }, items],
+  ];
+  const generic = custom.ar_delay_days !== 0 || custom.collection_pct !== 100 || custom.ap_delay_days !== 0;
+  if (customerNote) cases.push(['Custom case: ' + customerNote.customer_delayed + ' only, ' + custDelay + ' days late' + (generic ? ' (plus the other settings)' : ''), custom, customItems]);
+  else if (generic && !(custom.ar_delay_days === 30 && custom.collection_pct === 100 && custom.ap_delay_days === 0)) cases.push(['Custom case', custom, items]);
   return {
     as_of: today, has_cash_entry: opening.has_entry, cash_today_inr: inrText(opening.amount),
     open_receivables: { count: recv.length, total_inr: inrText(recv.reduce((a, i) => a + i.amount, 0)) },
     open_payables: { count: items.length - recv.length, total_inr: inrText(items.filter(i => i.kind === 'out').reduce((a, i) => a + i.amount, 0)) },
-    cases: cases.map(([label, o]) => { const r = runForecast(opening.amount, items, o, today); return {
+    ...(customerNote ? { customer_scenario: customerNote } : {}),
+    cases: cases.map(([label, o, its]) => { const r = runForecast(opening.amount, its, o, today); return {
       case: label, closing_cash_inr: inrText(r.closing), total_receipts_inr: inrText(r.total_in), total_payments_inr: inrText(r.total_out),
       lowest_cash_inr: inrText(r.lowest.amount), lowest_cash_date: r.lowest.date, first_day_cash_negative: r.first_negative, cover_needed_inr: r.shortfall > 0 ? inrText(r.shortfall) : null }; }),
-    caveat: 'Built only from open invoices and approved bills (drafts and bills awaiting approval are excluded) plus the assumptions passed in.',
+    caveat: 'Built only from open invoices and approved bills (drafts and bills awaiting approval are excluded) plus the assumptions passed in. A receipt that falls after the forecast horizon does not appear in closing cash.',
   };
 }
 
@@ -78,7 +96,8 @@ const COMMON = `HOW TO ANSWER
 - Lead with the direct answer, then the evidence, then ONE recommended action. Say how confident you are and why.
 - If a tool returns "available": false, "needs_data", an "error", or empty lists, say plainly what data is missing or that nothing is recorded. Do not substitute a guess.
 - Respect each tool's "definition", "basis" and "caveat" fields. The books are invoice-based, not a general ledger; salaries and taxes are not in the cash forecast unless supplied.
-- Be concise (under about 250 words unless asked for detail). Short paragraphs or bullets. Do not give tax, legal or investment advice; point to a qualified professional where needed.`;
+- Be concise (under about 250 words unless asked for detail). Use short paragraphs and "- " bullets only. Do NOT use tables, headings, horizontal rules, emoji or code blocks: the chat window cannot display them.
+- For a question about ONE customer ("if X pays late"), call cash_forecast with customer_name and customer_delay_days. Never use ar_delay_days for that: it delays every customer. If the answer depends on a receipt falling after the forecast horizon, say so. Do not give tax, legal or investment advice; point to a qualified professional where needed.`;
 const AGENTS: AgentDef[] = [
   { key: 'treasury', name: 'Treasury Agent', role: 'Cash, liquidity and collections',
     blurb: 'Watches cash, runway and the 90-day forecast, and tells you which receivables to chase and which payments can wait.',
