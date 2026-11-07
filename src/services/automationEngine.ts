@@ -76,14 +76,14 @@ async function getTenantNotificationEmails(pool, tenantId) {
 
 async function getManagerPhone(pool, tenantId) {
   try {
-    const result = await pool.query("SELECT phone FROM employees WHERE phone IS NOT NULL LIMIT 1");
+    const result = await pool.query("SELECT phone FROM employees WHERE tenant_id=$1 AND phone IS NOT NULL LIMIT 1", [tenantId]) /*tenant-scope*/;
     return result.rows[0] ? result.rows[0].phone : null;
   } catch { return null; }
 }
 
 async function getMonthlyBurn(pool, tenantId) {
   try {
-    const result = await pool.query(`SELECT COALESCE(SUM(total_amount),0) as burn FROM expense_claims WHERE created_at > NOW()-INTERVAL '30 days'`);
+    const result = await pool.query(`SELECT COALESCE(SUM(total_amount),0) as burn FROM expense_claims WHERE tenant_id=$1 AND created_at > NOW()-INTERVAL '30 days'`, [tenantId]);
     return parseFloat(result.rows[0] ? result.rows[0].burn : 0);
   } catch { return 0; }
 }
@@ -96,7 +96,7 @@ export async function handleInvoiceAutoApproval(pool, tenantId, invoiceId) {
     const amount = parseFloat(invoice.total_amount || invoice.balance_due || 0);
     const THRESHOLD = 50000;
     if (amount <= THRESHOLD && invoice.status === 'pending') {
-      await pool.query('UPDATE ap_invoices SET status=$1, updated_at=NOW() WHERE id=$2', ['approved', invoiceId]);
+      await pool.query('UPDATE ap_invoices SET status=$1, updated_at=NOW() WHERE id=$2 AND tenant_id=$3', ['approved', invoiceId, tenantId]);
       const adminEmail = await getTenantAdminEmail(pool, tenantId);
       await sendEmail(adminEmail, 'Auto-Approved: Invoice ' + invoice.invoice_number,
         '<div style="font-family:Arial;padding:20px"><h2 style="color:#1B4FD8">Invoice Auto-Approved</h2>' +
@@ -121,11 +121,15 @@ export async function handleWhatsAppApprovalReply(pool, from, body) {
   const isApprove = !!approveMatch;
   const partialId = (approveMatch || rejectMatch)[1].toLowerCase();
   try {
-    const result = await pool.query("SELECT * FROM ap_invoices WHERE id::text LIKE $1 AND status='pending' LIMIT 1", [partialId + '%']);
+    const digits = String(from || '').replace(/\D/g, '').slice(-10);
+    if (digits.length < 10) return 'Sender not recognised.';
+    const who = await pool.query("SELECT DISTINCT tenant_id FROM employees WHERE RIGHT(regexp_replace(COALESCE(phone,''),'\\D','','g'),10)=$1", [digits]);
+    if (who.rows.length !== 1) return 'Sender not recognised.';
+    const result = await pool.query("SELECT * FROM ap_invoices WHERE tenant_id=$2 AND id::text LIKE $1 AND status='pending' LIMIT 1", [partialId + '%', who.rows[0].tenant_id]);
     if (!result.rows.length) return 'Invoice not found or already processed.';
     const invoice = result.rows[0];
     const newStatus = isApprove ? 'approved' : 'rejected';
-    await pool.query('UPDATE ap_invoices SET status=$1, updated_at=NOW() WHERE id=$2', [newStatus, invoice.id]);
+    await pool.query('UPDATE ap_invoices SET status=$1, updated_at=NOW() WHERE id=$2 AND tenant_id=$3', [newStatus, invoice.id, invoice.tenant_id]);
     const amount = parseFloat(invoice.total_amount || 0);
     return 'Invoice ' + invoice.invoice_number + ' has been ' + newStatus.toUpperCase() + '. Amount: Rs ' + amount.toLocaleString('en-IN');
   } catch { return 'Error processing approval. Please try again.'; }
@@ -138,7 +142,7 @@ export async function handleExpenseAutoApproval(pool, tenantId, expenseId) {
     const expense = result.rows[0];
     const amount = parseFloat(expense.total_amount || 0);
     if (amount <= 15000 && expense.status === 'submitted') {
-      await pool.query('UPDATE expense_claims SET status=$1, updated_at=NOW() WHERE id=$2', ['approved', expenseId]);
+      await pool.query('UPDATE expense_claims SET status=$1, updated_at=NOW() WHERE id=$2 AND tenant_id=$3', ['approved', expenseId, tenantId]);
       const adminEmail = await getTenantAdminEmail(pool, tenantId);
       await sendEmail(adminEmail, 'Expense Auto-Approved',
         '<div style="font-family:Arial;padding:20px"><h2 style="color:#059669">Expense Approved</h2>' +
@@ -169,7 +173,7 @@ export async function checkLowCashAlert(pool, tenantId) {
 export async function checkComplianceAlerts(pool, tenantId) {
   try {
     const result = await pool.query(
-      "SELECT * FROM compliance_items WHERE status NOT IN ('Completed','Closed') AND due_date BETWEEN NOW() AND NOW() + INTERVAL '7 days' LIMIT 10"
+      "SELECT * FROM compliance_items WHERE tenant_id=$1 AND status NOT IN ('Completed','Closed') AND due_date BETWEEN NOW() AND NOW() + INTERVAL '7 days' LIMIT 10", [tenantId]
     );
     if (!result.rows.length) return;
     const adminEmail = await getTenantAdminEmail(pool, tenantId);
@@ -212,7 +216,7 @@ export async function runBankReconciliation(pool, tenantId) {
 export async function checkVendorPaymentSchedule(pool, tenantId) {
   try {
     const result = await pool.query(
-      "SELECT po.*, v.name as vendor_name FROM purchase_orders po LEFT JOIN vendors v ON po.vendor_id=v.id WHERE po.status IN ('approved','Approved') AND po.expected_date BETWEEN NOW() AND NOW()+INTERVAL '3 days' LIMIT 10"
+      "SELECT po.*, v.name as vendor_name FROM purchase_orders po LEFT JOIN vendors v ON po.vendor_id=v.id WHERE po.tenant_id=$1 AND po.status IN ('approved','Approved') AND po.expected_date BETWEEN NOW() AND NOW()+INTERVAL '3 days' LIMIT 10", [tenantId]
     );
     if (!result.rows.length) return;
     const adminEmail = await getTenantAdminEmail(pool, tenantId);
@@ -253,7 +257,7 @@ export async function sendDailyMorningBrief(pool, tenantId) {
 
     // Get compliance alerts due today
     const compliance = await pool.query(
-      "SELECT title, due_date FROM compliance_items WHERE status NOT IN ('Completed','Closed') AND due_date <= NOW()+INTERVAL '7 days' ORDER BY due_date ASC LIMIT 5"
+      "SELECT title, due_date FROM compliance_items WHERE tenant_id=$1 AND status NOT IN ('Completed','Closed') AND due_date <= NOW()+INTERVAL '7 days' ORDER BY due_date ASC LIMIT 5", [tenantId]
     ).catch(() => ({ rows: [] }));
 
     const today = new Date().toLocaleDateString('en-IN', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
