@@ -34,7 +34,7 @@ export function createAutopilotRouter(pool: Pool): Router {
   router.put('/', requireAuth, async (req: Request, res: Response) => {
     try {
       const u = (req as any).user;
-      if (u.role && !['admin', 'owner'].includes(String(u.role).toLowerCase())) { res.status(403).json({ error: 'Only an admin can change Autopilot settings.' }); return; }
+      if (u.role && !/admin|owner|cfo/i.test(String(u.role))) { res.status(403).json({ error: 'Only an admin can change Autopilot settings.' }); return; }
       await ensureAutopilotTables(pool);
       const b = req.body || {};
       const cur = await getSettings(pool, tid(req));

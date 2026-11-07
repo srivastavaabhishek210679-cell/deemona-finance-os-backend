@@ -1,3 +1,4 @@
+import { auditTrailMiddleware, createAuditTrailRouter } from './routes/auditTrailRoutes';
 import dotenv from 'dotenv';
 import { createNetSuiteRouter, startNetSuitePoller } from './routes/netsuiteRoutes';
 import { createMessageStreamRouter } from './routes/messageStreamRoutes';
@@ -36,6 +37,8 @@ import { createWebhookAdminRouter, createWebhookInboundRouter } from './routes/w
 import { createCashPositionRouter } from './routes/cashPositionRoutes';
 import { createAutopilotRouter } from './routes/autopilotRoutes';
 import { createCommandCenterRouter } from './routes/commandCenterRoutes';
+import { createPaymentPlanRouter } from './routes/paymentPlanRoutes';
+import { createRiskRouter } from './routes/riskRoutes';
 import { createRecommendationRouter } from './routes/recommendationRoutes';
 import { createCashForecastRouter } from './routes/cashForecastRoutes';
 import { createSpecialistRouter } from './routes/specialistAgentRoutes';
@@ -101,6 +104,7 @@ app.use(cors({
 app.options("*", cors());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
+app.use(auditTrailMiddleware(pool)); // audit trail of every change request
 
 // ── Rate limiting ─────────────────────────────────────────────
 app.use('/api/', rateLimit({
@@ -142,6 +146,8 @@ app.use('/api/webhook-in', createWebhookInboundRouter(pool));
 app.use('/api/cash-position', createCashPositionRouter(pool));
 app.use('/api/cash-forecast', createCashForecastRouter(pool));
 app.use('/api/recommendations', createRecommendationRouter(pool));
+app.use('/api/risk', createRiskRouter(pool));
+app.use('/api/payment-plan', createPaymentPlanRouter(pool));
 app.use('/api/command-center', createCommandCenterRouter(pool));
 app.use('/api/autopilot', createAutopilotRouter(pool));
 app.use('/api/specialists', createSpecialistRouter(pool));
@@ -151,6 +157,7 @@ app.use('/api/cfo-proactive', createCfoProactiveRouter(pool));
 app.use('/api/document-ai', createDocumentAIRouter(pool));
 app.use('/api/automation',  createAutomationRouter(pool));
 app.use('/api/tax-agent',   createTaxAgentRouter(pool));
+app.use('/api/audit-trail', createAuditTrailRouter(pool));
 app.use('/api/audit',       createAuditAgentRouter(pool));
 app.use('/api/marketplace', createMarketplaceRouter(pool));
 app.use('/api/tally',       createTallyRouter(pool));
