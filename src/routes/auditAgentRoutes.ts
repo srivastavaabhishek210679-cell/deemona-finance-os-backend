@@ -1,3 +1,4 @@
+import { cashAsOf } from '../services/cashPosition';
 import { Router, Request, Response } from 'express';
 import { Pool } from 'pg';
 import { requireAuth } from '../middleware/auth';
@@ -149,7 +150,7 @@ export function createAuditAgentRouter(pool: Pool): Router {
       const { module = 'all' } = req.body;
 
       const [banks, ar, ap, payroll, expenses, projects] = await Promise.all([
-        pool.query(`SELECT COALESCE(SUM(current_balance),0) as total FROM bank_accounts WHERE tenant_id=$1`, [tenantId]),
+        cashAsOf(pool, tenantId).then((c: any) => ({ rows: [{ total: c.amount }] })),
         pool.query(`SELECT COUNT(*) as count, COALESCE(SUM(balance_due),0) as outstanding, COALESCE(SUM(total_amount),0) as total FROM ar_invoices WHERE tenant_id=$1 AND status NOT IN ('paid','cancelled')`, [tenantId]),
         pool.query(`SELECT COUNT(*) as count, COALESCE(SUM(balance_due),0) as outstanding FROM ap_invoices WHERE tenant_id=$1 AND status NOT IN ('paid','rejected')`, [tenantId]),
         pool.query(`SELECT COALESCE(SUM(total_gross),0) as gross, COALESCE(SUM(total_net),0) as net FROM payroll_runs WHERE tenant_id=$1 AND status='paid'`, [tenantId]),

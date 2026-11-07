@@ -1,4 +1,5 @@
 ﻿import { Router, Request, Response } from 'express';
+import { cashAsOf } from '../services/cashPosition';
 import { Pool } from 'pg';
 import { requireAuth } from '../middleware/auth';
 
@@ -244,7 +245,7 @@ router.post('/reports/trigger', requireAuth, async (req: Request, res: Response)
     const snap = await Promise.all([
       pool.query(`SELECT COALESCE(SUM(total_amount),0) as revenue, COALESCE(SUM(outstanding_amount),0) as outstanding, COUNT(*) as count FROM ar_invoices WHERE tenant_id=$1`, [tenantId]).catch(()=>({rows:[{revenue:0,outstanding:0,count:0}]})),
       pool.query(`SELECT COALESCE(SUM(amount),0) as total, COUNT(*) as count FROM expenses WHERE tenant_id=$1 AND expense_date >= NOW()-INTERVAL '30 days'`, [tenantId]).catch(()=>({rows:[{total:0,count:0}]})),
-      pool.query(`SELECT COALESCE(SUM(balance),0) as cash FROM bank_accounts WHERE tenant_id=$1`, [tenantId]).catch(()=>({rows:[{cash:0}]})),
+      cashAsOf(pool, tenantId).then((c: any) => ({ rows: [{ cash: c.amount }] })).catch(()=>({rows:[{cash:0}]})),
       pool.query(`SELECT COUNT(*) as count, COALESCE(SUM(basic_salary),0) as payroll FROM employees WHERE tenant_id=$1 AND status='active'`, [tenantId]).catch(()=>({rows:[{count:0,payroll:0}]})),
       pool.query(`SELECT COALESCE(SUM(total_tax),0) as gst FROM ar_invoices WHERE tenant_id=$1 AND invoice_date >= DATE_TRUNC('month',NOW())`, [tenantId]).catch(()=>({rows:[{gst:0}]})),
       pool.query(`SELECT COUNT(*) as overdue FROM ar_invoices WHERE tenant_id=$1 AND due_date < NOW() AND status != 'paid'`, [tenantId]).catch(()=>({rows:[{overdue:0}]})),

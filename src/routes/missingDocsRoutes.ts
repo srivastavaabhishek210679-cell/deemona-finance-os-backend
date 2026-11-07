@@ -3,6 +3,7 @@
 // File: src/routes/missingDocsRoutes.ts
 // ============================================================
 
+import { cashAsOf } from '../services/cashPosition';
 import { Router, Request, Response } from 'express';
 import { Pool } from 'pg';
 import { requireAuth } from '../middleware/auth';
@@ -357,7 +358,7 @@ export function createMissingDocsRouter(pool: Pool): Router {
         pool.query("SELECT COALESCE(SUM(balance_due),0) as val FROM ar_invoices WHERE tenant_id=$1 AND status IN ('sent','overdue')", [tid(req)]).catch(() => ({ rows: [{ val: 0 }] })),
         pool.query("SELECT COALESCE(SUM(balance_due),0) as val FROM ap_invoices WHERE tenant_id=$1 AND status IN ('pending','approved')", [tid(req)]).catch(() => ({ rows: [{ val: 0 }] })),
         pool.query("SELECT COALESCE(SUM(quantity * unit_cost),0) as val FROM inventory_items WHERE tenant_id=$1", [tid(req)]).catch(() => ({ rows: [{ val: 0 }] })),
-        pool.query("SELECT COALESCE(SUM(current_balance),0) as val FROM bank_accounts WHERE tenant_id=$1", [tid(req)]).catch(() => ({ rows: [{ val: 0 }] })),
+        cashAsOf(pool, tid(req)).then((c: any) => ({ rows: [{ val: c.amount }] })).catch(() => ({ rows: [{ val: 0 }] })),
       ]);
 
       const currentAssets = {
@@ -400,7 +401,7 @@ export function createMissingDocsRouter(pool: Pool): Router {
         pool.query("SELECT COALESCE(SUM(balance_due),0) as val FROM ar_invoices WHERE tenant_id=$1 AND status IN ('sent','overdue')", [tid(req)]).catch(() => ({ rows: [{ val: 0 }] })),
         pool.query("SELECT COALESCE(SUM(balance_due),0) as val FROM ap_invoices WHERE tenant_id=$1 AND status IN ('pending','approved')", [tid(req)]).catch(() => ({ rows: [{ val: 0 }] })),
         pool.query("SELECT COALESCE(SUM(quantity * unit_cost),0) as val FROM inventory_items WHERE tenant_id=$1", [tid(req)]).catch(() => ({ rows: [{ val: 0 }] })),
-        pool.query("SELECT COALESCE(SUM(current_balance),0) as val FROM bank_accounts WHERE tenant_id=$1", [tid(req)]).catch(() => ({ rows: [{ val: 0 }] })),
+        cashAsOf(pool, tid(req)).then((c: any) => ({ rows: [{ val: c.amount }] })).catch(() => ({ rows: [{ val: 0 }] })),
       ]);
       const ca = { cash: parseFloat(cash.rows[0].val), accounts_receivable: parseFloat(ar.rows[0].val), inventory: parseFloat(inventory.rows[0].val), prepaid: 0, other: 0 };
       const cl = { accounts_payable: parseFloat(ap.rows[0].val), short_term_loans: 0, accruals: 0, other: 0 };

@@ -1,3 +1,4 @@
+import { cashAsOf } from '../services/cashPosition';
 import { Router, Request, Response } from 'express';
 import { Pool } from 'pg';
 import { requireAuth } from '../middleware/auth';
@@ -17,7 +18,7 @@ export function createForecastingRouter(pool: Pool): Router {
 
       // Get historical data
       const [banks, arPending, apPending, payroll, txnTrend] = await Promise.all([
-        pool.query('SELECT COALESCE(SUM(current_balance),0) as total FROM bank_accounts WHERE tenant_id=$1 AND is_active=TRUE', [tenantId]),
+        cashAsOf(pool, tenantId).then((c: any) => ({ rows: [{ total: c.amount }] })),
         pool.query(`SELECT COALESCE(SUM(balance_due),0) as total, due_date FROM ar_invoices WHERE tenant_id=$1 AND status NOT IN ('paid','cancelled') GROUP BY due_date ORDER BY due_date`, [tenantId]),
         pool.query(`SELECT COALESCE(SUM(balance_due),0) as total, due_date FROM ap_invoices WHERE tenant_id=$1 AND status NOT IN ('paid','rejected') GROUP BY due_date ORDER BY due_date`, [tenantId]),
         pool.query(`SELECT total_gross as monthly FROM payroll_runs WHERE tenant_id=$1 AND status IN ('paid','approved') ORDER BY year DESC, month DESC LIMIT 1`, [tenantId]),

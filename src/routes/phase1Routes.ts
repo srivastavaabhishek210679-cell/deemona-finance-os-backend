@@ -4,6 +4,7 @@
 //         Chatbot, What-if, Attrition, Operations,
 //         Admin/Feature Flags, Blockchain Audit, Filing Auto
 // ============================================================
+import { cashAsOf } from '../services/cashPosition';
 import { Router, Request, Response } from 'express';
 import { Pool } from 'pg';
 import { requireAuth } from '../middleware/auth';
@@ -44,7 +45,7 @@ async function getFinancialSnapshot(pool: Pool, tenantId: string) {
     safe(pool.query(`SELECT COALESCE(SUM(current_stock*unit_cost),0) as value, COUNT(*) as items FROM inventory_items WHERE tenant_id=$1`, [tenantId])),
     safe(pool.query(`SELECT COUNT(*) as count, COALESCE(SUM(basic_salary),0) as payroll FROM employees WHERE tenant_id=$1 AND status='active'`, [tenantId])),
     safe(pool.query(`SELECT COALESCE(SUM(total_budgeted),0) as budget, COALESCE(SUM(total_spent),0) as spent FROM budgets WHERE tenant_id=$1`, [tenantId])),
-    safe(pool.query(`SELECT COALESCE(SUM(current_balance),0) as cash FROM bank_accounts WHERE tenant_id=$1 AND is_active=true`, [tenantId])),
+    safe(cashAsOf(pool, tenantId).then((c: any) => ({ rows: [{ cash: c.amount }] }))),
     safe(pool.query(`SELECT COALESCE(SUM(cgst+sgst+igst),0) as total FROM gst_transactions WHERE tenant_id=$1 AND transaction_type='sale'`, [tenantId])),
     safe(pool.query(`SELECT COALESCE(SUM(total_gross),0) as gross, COALESCE(SUM(total_net),0) as net FROM payroll_runs WHERE tenant_id=$1 AND year=EXTRACT(YEAR FROM NOW()) AND month=EXTRACT(MONTH FROM NOW())`, [tenantId])),
   ]);
@@ -800,7 +801,7 @@ export async function runDailyAIJobs(pool: Pool): Promise<void> {
       try {
         const snap = await (async () => {
           const ar = await pool.query(`SELECT COALESCE(SUM(total_amount),0) as total FROM ar_invoices WHERE tenant_id=$1`, [row.tenant_id]);
-          const bank = await pool.query(`SELECT COALESCE(SUM(current_balance),0) as cash FROM bank_accounts WHERE tenant_id=$1`, [row.tenant_id]);
+          const bank = await cashAsOf(pool, row.tenant_id).then((c: any) => ({ rows: [{ cash: c.amount }] }));
           return { revenue: parseFloat(ar.rows[0]?.total || 0), cash: parseFloat(bank.rows[0]?.cash || 0) };
         })();
         if (snap.revenue === 0 && snap.cash === 0) continue;

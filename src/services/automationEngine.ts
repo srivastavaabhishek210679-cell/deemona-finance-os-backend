@@ -1,4 +1,5 @@
 ﻿import { Pool } from 'pg';
+import { cashAsOf } from './cashPosition';
 import Anthropic from '@anthropic-ai/sdk';
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -240,7 +241,7 @@ export async function sendDailyMorningBrief(pool, tenantId) {
     const [overdue, pending, cashResult, expenseResult] = await Promise.all([
       pool.query("SELECT COUNT(*) as cnt, COALESCE(SUM(balance_due),0) as amt FROM ar_invoices WHERE tenant_id=$1 AND status='overdue'", [tenantId]).catch(() => ({ rows: [{ cnt: 0, amt: 0 }] })),
       pool.query("SELECT COUNT(*) as cnt FROM ap_invoices WHERE tenant_id=$1 AND status='pending'", [tenantId]).catch(() => ({ rows: [{ cnt: 0 }] })),
-      pool.query("SELECT COALESCE(SUM(current_balance),0) as cash FROM bank_accounts WHERE tenant_id=$1", [tenantId]).catch(() => ({ rows: [{ cash: 0 }] })),
+      cashAsOf(pool, tenantId).then((c: any) => ({ rows: [{ cash: c.amount }] })).catch(() => ({ rows: [{ cash: 0 }] })),
       pool.query("SELECT COALESCE(SUM(total_amount),0) as amt FROM expense_claims WHERE tenant_id=$1 AND status='submitted'", [tenantId]).catch(() => ({ rows: [{ amt: 0 }] })),
     ]);
 
@@ -520,10 +521,7 @@ export async function predictCashFlow(pool, tenantId) {
     const adminEmail = await getTenantAdminEmail(pool, tenantId);
 
     // Get current cash
-    const cashResult = await pool.query(
-      "SELECT COALESCE(SUM(current_balance),0) as cash FROM bank_accounts WHERE tenant_id=$1",
-      [tenantId]
-    ).catch(() => ({ rows: [{ cash: 0 }] }));
+    const cashResult = await cashAsOf(pool, tenantId).then((c: any) => ({ rows: [{ cash: c.amount }] })).catch(() => ({ rows: [{ cash: 0 }] }));
     const currentCash = parseFloat(cashResult.rows[0].cash);
 
     // Get expected inflows (AR due in 30 days)
