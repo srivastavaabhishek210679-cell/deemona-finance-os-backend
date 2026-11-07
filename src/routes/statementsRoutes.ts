@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { Pool } from 'pg';
 import { requireAuth } from '../middleware/auth';
+import { ensurePaymentEventsTable } from './paymentEventsRoutes';
 
 export function createStatementsRouter(pool: Pool): Router {
   const router = Router();
@@ -126,22 +127,64 @@ export function createStatementsRouter(pool: Pool): Router {
         ORDER BY type, sub_type, code
       `, [tenantId, asOf]);
 
-      // Also include bank account balances
-      const bankBals = await pool.query(`
-        SELECT COALESCE(SUM(current_balance), 0) as total
-        FROM bank_accounts WHERE tenant_id = $1 AND is_active = TRUE
-      `, [tenantId]);
-
-      // AR/AP balances
-      const arBal = await pool.query(`
-        SELECT COALESCE(SUM(balance_due), 0) as total FROM ar_invoices
-        WHERE tenant_id = $1 AND status NOT IN ('paid','cancelled')
-      `, [tenantId]);
-
-      const apBal = await pool.query(`
-        SELECT COALESCE(SUM(balance_due), 0) as total FROM ap_invoices
-        WHERE tenant_id = $1 AND status NOT IN ('paid','rejected')
-      `, [tenantId]);
+      // Cash, receivables and payables as of the requested date. For a past date these are rebuilt
+      // from dated records only (never today's balances); what cannot be rebuilt is reported, not guessed.
+      const todayStr = new Date().toISOString().split('T')[0];
+      const isPast = asOf < todayStr;
+      const warnings: string[] = [];
+      let arUnknown = { count: 0, total: 0 };
+      let apUnknown = { count: 0, total: 0 };
+      let bankBals: any, arBal: any, apBal: any;
+      if (!isPast) {
+        bankBals = await pool.query(`
+          SELECT COALESCE(SUM(current_balance), 0) as total
+          FROM bank_accounts WHERE tenant_id = $1 AND is_active = TRUE
+        `, [tenantId]);
+        arBal = await pool.query(`
+          SELECT COALESCE(SUM(balance_due), 0) as total FROM ar_invoices
+          WHERE tenant_id = $1 AND status NOT IN ('paid','cancelled')
+        `, [tenantId]);
+        apBal = await pool.query(`
+          SELECT COALESCE(SUM(balance_due), 0) as total FROM ap_invoices
+          WHERE tenant_id = $1 AND status NOT IN ('paid','rejected')
+        `, [tenantId]);
+      } else {
+        await ensurePaymentEventsTable(pool);
+        const cash = await pool.query(`
+          SELECT COALESCE(SUM(b.opening_balance + COALESCE(m.net, 0)), 0) AS total,
+                 COALESCE(SUM(b.current_balance - (b.opening_balance + COALESCE(a.net, 0))), 0) AS drift,
+                 (SELECT MIN(date)::text FROM bank_transactions WHERE tenant_id = $1) AS first_txn
+          FROM bank_accounts b
+          LEFT JOIN (SELECT bank_account_id, SUM(CASE WHEN type = 'credit' THEN amount ELSE -amount END) AS net
+                     FROM bank_transactions WHERE tenant_id = $1 AND date <= $2 GROUP BY bank_account_id) m ON m.bank_account_id = b.id
+          LEFT JOIN (SELECT bank_account_id, SUM(CASE WHEN type = 'credit' THEN amount ELSE -amount END) AS net
+                     FROM bank_transactions WHERE tenant_id = $1 GROUP BY bank_account_id) a ON a.bank_account_id = b.id
+          WHERE b.tenant_id = $1 AND b.is_active = TRUE
+        `, [tenantId, asOf]);
+        bankBals = { rows: [{ total: cash.rows[0].total }] };
+        if (Math.abs(parseFloat(cash.rows[0].drift)) >= 1) warnings.push('Bank balances do not match the recorded bank transactions, so cash for a past date is approximate.');
+        if (cash.rows[0].first_txn && asOf < cash.rows[0].first_txn) warnings.push('No bank transactions are recorded before ' + cash.rows[0].first_txn + '; cash shown is the opening balance.');
+        const settled = async (tbl: string, type: string, skip: string) => (await pool.query(`
+          WITH inv AS (
+            SELECT i.total_amount, i.paid_amount,
+                   COALESCE((SELECT SUM(e.amount) FROM invoice_payment_events e WHERE e.tenant_id = $1 AND e.invoice_type = $3 AND e.invoice_id = i.id), 0) AS ev_total,
+                   COALESCE((SELECT SUM(e.amount) FROM invoice_payment_events e WHERE e.tenant_id = $1 AND e.invoice_type = $3 AND e.invoice_id = i.id AND e.payment_date <= $2), 0) AS ev_by_date
+            FROM ${tbl} i WHERE i.tenant_id = $1 AND i.date <= $2 AND i.status NOT IN (${skip}))
+          SELECT COALESCE(SUM(CASE WHEN paid_amount = 0 OR ev_total + 0.005 >= paid_amount THEN total_amount - ev_by_date END), 0) AS known,
+                 COUNT(*) FILTER (WHERE paid_amount > 0 AND ev_total + 0.005 < paid_amount) AS unknown_count,
+                 COALESCE(SUM(CASE WHEN paid_amount > 0 AND ev_total + 0.005 < paid_amount THEN total_amount END), 0) AS unknown_total
+          FROM inv
+        `, [tenantId, asOf, type])).rows[0];
+        const ar = await settled('ar_invoices', 'ar', `'draft','cancelled'`);
+        const ap = await settled('ap_invoices', 'ap', `'draft','rejected'`);
+        arBal = { rows: [{ total: ar.known }] };
+        apBal = { rows: [{ total: ap.known }] };
+        arUnknown = { count: parseInt(ar.unknown_count), total: parseFloat(ar.unknown_total) };
+        apUnknown = { count: parseInt(ap.unknown_count), total: parseFloat(ap.unknown_total) };
+        if (arUnknown.count > 0) warnings.push(arUnknown.count + ' receivable invoice(s) worth ' + arUnknown.total.toFixed(2) + ' were paid before payment dates were recorded, so their balance on ' + asOf + ' cannot be rebuilt and is left out.');
+        if (apUnknown.count > 0) warnings.push(apUnknown.count + ' payable invoice(s) worth ' + apUnknown.total.toFixed(2) + ' were paid before payment dates were recorded, so their balance on ' + asOf + ' cannot be rebuilt and is left out.');
+        warnings.push('Invoices cancelled or rejected since ' + asOf + ' are not included.');
+      }
 
       const rows = result.rows;
       const assets      = rows.filter(r => r.type === 'asset');
@@ -161,6 +204,7 @@ export function createStatementsRouter(pool: Pool): Router {
 
       res.json({
         as_of: asOf,
+        data_quality: { is_past_date: isPast, warnings, receivables_not_rebuildable: arUnknown, payables_not_rebuildable: apUnknown },
         assets: {
           current: assets.filter(a => a.sub_type?.includes('current')),
           fixed:   assets.filter(a => a.sub_type?.includes('fixed')),
@@ -396,45 +440,6 @@ export function createStatementsRouter(pool: Pool): Router {
         tax_note: 'Flat 25% of positive EBITDA; not a computed tax liability',
         net_profit: netProfit,
         net_margin: rev > 0 ? ((netProfit / rev) * 100).toFixed(1) : '0',
-      });
-    } catch (err) { res.status(500).json({ error: String(err) }); }
-  });
-
-  // ── GET /api/statements/balance-sheet — Real Balance Sheet ─
-  router.get('/balance-sheet', requireAuth, async (req, res) => {
-    try {
-      const tenantId = tid(req);
-
-      const [banks, ar, ap, assets, inventory] = await Promise.all([
-        pool.query('SELECT COALESCE(SUM(current_balance),0) as total FROM bank_accounts WHERE tenant_id=$1 AND is_active=true', [tenantId]),
-        pool.query(`SELECT COALESCE(SUM(total_amount - paid_amount),0) as total FROM ar_invoices WHERE tenant_id=$1 AND status NOT IN ('paid','cancelled')`, [tenantId]),
-        pool.query(`SELECT COALESCE(SUM(total_amount - paid_amount),0) as total FROM ap_invoices WHERE tenant_id=$1 AND status NOT IN ('paid','rejected')`, [tenantId]),
-        pool.query("SELECT COALESCE(SUM(current_value),0) as total FROM fixed_assets WHERE tenant_id=$1 AND status='active'", [tenantId]),
-        pool.query('SELECT COALESCE(SUM(current_stock * unit_cost),0) as total FROM inventory_items WHERE tenant_id=$1 AND is_active=true', [tenantId]),
-      ]);
-
-      const cash = parseFloat(banks.rows[0].total);
-      const receivables = parseFloat(ar.rows[0].total);
-      const fixedAssets = parseFloat(assets.rows[0].total);
-      const inventoryVal = parseFloat(inventory.rows[0].total);
-      const totalAssets = cash + receivables + fixedAssets + inventoryVal;
-
-      const payables = parseFloat(ap.rows[0].total);
-      const equity = totalAssets - payables;
-
-      res.json({
-        assets: {
-          current: { cash, accounts_receivable: receivables, inventory: inventoryVal, total: cash + receivables + inventoryVal },
-          fixed: { total: fixedAssets },
-          total: totalAssets,
-        },
-        liabilities: {
-          current: { accounts_payable: payables, total: payables },
-          total: payables,
-        },
-        equity: { retained_earnings: equity, total: equity },
-        total_liabilities_equity: payables + equity,
-        balanced: Math.abs(totalAssets - (payables + equity)) < 1,
       });
     } catch (err) { res.status(500).json({ error: String(err) }); }
   });
