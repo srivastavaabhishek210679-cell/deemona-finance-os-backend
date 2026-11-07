@@ -166,13 +166,13 @@ export function createStatementsRouter(pool: Pool): Router {
         if (cash.rows[0].first_txn && asOf < cash.rows[0].first_txn) warnings.push('No bank transactions are recorded before ' + cash.rows[0].first_txn + '; cash shown is the opening balance.');
         const settled = async (tbl: string, type: string, skip: string) => (await pool.query(`
           WITH inv AS (
-            SELECT i.total_amount, i.paid_amount,
+            SELECT i.total_amount, i.paid_amount, i.status AS inv_status,
                    COALESCE((SELECT SUM(e.amount) FROM invoice_payment_events e WHERE e.tenant_id = $1 AND e.invoice_type = $3 AND e.invoice_id = i.id), 0) AS ev_total,
                    COALESCE((SELECT SUM(e.amount) FROM invoice_payment_events e WHERE e.tenant_id = $1 AND e.invoice_type = $3 AND e.invoice_id = i.id AND e.payment_date <= $2), 0) AS ev_by_date
             FROM ${tbl} i WHERE i.tenant_id = $1 AND i.date <= $2 AND i.status NOT IN (${skip}))
-          SELECT COALESCE(SUM(CASE WHEN paid_amount = 0 OR ev_total + 0.005 >= paid_amount THEN total_amount - ev_by_date END), 0) AS known,
-                 COUNT(*) FILTER (WHERE paid_amount > 0 AND ev_total + 0.005 < paid_amount) AS unknown_count,
-                 COALESCE(SUM(CASE WHEN paid_amount > 0 AND ev_total + 0.005 < paid_amount THEN total_amount END), 0) AS unknown_total
+          SELECT COALESCE(SUM(CASE WHEN NOT ((paid_amount > 0 OR inv_status = 'paid') AND ev_total + 0.005 < GREATEST(paid_amount, CASE WHEN inv_status = 'paid' THEN total_amount ELSE 0 END)) THEN total_amount - ev_by_date END), 0) AS known,
+                 COUNT(*) FILTER (WHERE (paid_amount > 0 OR inv_status = 'paid') AND ev_total + 0.005 < GREATEST(paid_amount, CASE WHEN inv_status = 'paid' THEN total_amount ELSE 0 END)) AS unknown_count,
+                 COALESCE(SUM(CASE WHEN (paid_amount > 0 OR inv_status = 'paid') AND ev_total + 0.005 < GREATEST(paid_amount, CASE WHEN inv_status = 'paid' THEN total_amount ELSE 0 END) THEN total_amount END), 0) AS unknown_total
           FROM inv
         `, [tenantId, asOf, type])).rows[0];
         const ar = await settled('ar_invoices', 'ar', `'draft','cancelled'`);
