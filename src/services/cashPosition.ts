@@ -36,6 +36,15 @@ export async function cashAsOf(pool: Pool, tenantId: string, asOf?: string): Pro
      FROM invoice_payment_events WHERE tenant_id = $1 AND payment_date > $2 AND payment_date <= $3`,
     [tenantId, e.rows[0].as_of, d]);
   const entryAmount = parseFloat(e.rows[0].amount);
-  const movement = parseFloat(m.rows[0].net);
+  // Fixed asset purchases made after the entry date also reduce cash. /*asset-cash*/
+  let assetSpend = 0;
+  try {
+    const fa = await pool.query(
+      `SELECT COALESCE(SUM(purchase_price), 0) AS total FROM fixed_assets
+       WHERE tenant_id = $1 AND purchase_date > $2 AND purchase_date <= $3`,
+      [tenantId, e.rows[0].as_of, d]);
+    assetSpend = parseFloat(fa.rows[0].total) || 0;
+  } catch { /* fixed_assets not available: ignore */ }
+  const movement = parseFloat(m.rows[0].net) - assetSpend;
   return { has_entry: true, amount: entryAmount + movement, entry_date: e.rows[0].as_of, entry_amount: entryAmount, movement, note: e.rows[0].note };
 }
