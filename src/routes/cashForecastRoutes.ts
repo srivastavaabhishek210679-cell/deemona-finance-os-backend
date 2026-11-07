@@ -53,7 +53,7 @@ async function build(pool: Pool, tenantId: string, custom: FcOpts) {
 
 const SYSTEM = `You are a finance analyst explaining a cash forecast to the owner of a small Indian business.
 Rules:
-- Use ONLY the numbers in the JSON you are given. Never invent, estimate or recompute figures. Quote amounts in Indian style (lakh, crore) and dates as "27 Nov".
+- Use ONLY the figures in the JSON you are given. Every amount and date is already written as finished text (for example "₹11.80 Cr" or "27 Dec"): copy those strings exactly as given. Never convert, re-spell, round, add up or recompute any amount, and never write amounts in words.
 - 120 to 170 words, plain language, no jargon, no markdown headings. Use short paragraphs; at most 3 bullet points starting with "- ".
 - Cover: (1) where cash is heading and the lowest point, (2) which receivable or bill matters most and whether one customer is a concentration risk, (3) what changes if customers pay late, (4) one or two practical next steps.
 - If has_cash_entry is false, say the forecast starts from zero and the owner should enter a cash balance first.
@@ -61,6 +61,15 @@ Rules:
 - Do not give investment, tax or legal advice.`;
 
 const lastCall = new Map<string, number>();
+
+// The model never formats numbers: every amount and date reaches it as finished text.
+const inrText = (n: number): string => {
+  const a = Math.abs(n), sign = n < 0 ? '-' : '';
+  if (a >= 1e7) return sign + '₹' + (a / 1e7).toFixed(2) + ' Cr';
+  if (a >= 1e5) return sign + '₹' + (a / 1e5).toFixed(2) + ' lakh';
+  return sign + '₹' + Math.round(a).toLocaleString('en-IN');
+};
+const dateText = (s: string | null): string | null => (s ? new Date(s + 'T00:00:00Z').toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'UTC' }) : null);
 
 export function createCashForecastRouter(pool: Pool): Router {
   const router = Router();
@@ -91,11 +100,18 @@ export function createCashForecastRouter(pool: Pool): Router {
       const recv = items.filter(i => i.kind === 'in');
       const totalRecv = recv.reduce((a, i) => a + i.amount, 0);
       const facts = {
-        today, has_cash_entry: opening.has_entry, cash_today: opening.amount,
-        assumptions: custom,
-        scenarios: scenarios.map(s => ({ name: s.label, closing_cash: s.closing, total_in: s.total_in, total_out: s.total_out, lowest_cash: s.lowest, first_day_cash_negative: s.first_negative, shortfall: s.shortfall })),
-        open_receivables: { count: recv.length, total: Math.round(totalRecv), largest: recv.slice().sort((a, b) => b.amount - a.amount).slice(0, 5).map(i => ({ customer: i.party, invoice: i.ref, amount: i.amount, due: i.due, overdue: i.overdue, share_of_receivables_pct: totalRecv > 0 ? Math.round((i.amount / totalRecv) * 100) : 0 })) },
-        open_payables: { count: items.length - recv.length, largest: items.filter(i => i.kind === 'out').sort((a, b) => b.amount - a.amount).slice(0, 5).map(i => ({ vendor: i.party, bill: i.ref, amount: i.amount, due: i.due, overdue: i.overdue })) },
+        today: dateText(today), has_cash_entry: opening.has_entry, cash_today: inrText(opening.amount),
+        assumptions: {
+          forecast_days: custom.days, customers_pay_late_by_days: custom.ar_delay_days, share_of_receivables_collected_pct: custom.collection_pct,
+          suppliers_paid_late_by_days: custom.ap_delay_days, other_monthly_costs_entered: inrText(custom.monthly_outflow), new_monthly_sales_entered: inrText(custom.monthly_inflow),
+        },
+        scenarios: scenarios.map(s => ({
+          name: s.label, closing_cash: inrText(s.closing), total_receipts: inrText(s.total_in), total_payments: inrText(s.total_out),
+          lowest_cash: inrText(s.lowest.amount), lowest_cash_date: dateText(s.lowest.date),
+          first_day_cash_negative: dateText(s.first_negative), cover_needed_if_negative: s.shortfall > 0 ? inrText(s.shortfall) : null,
+        })),
+        open_receivables: { count: recv.length, total: inrText(totalRecv), largest: recv.slice().sort((a, b) => b.amount - a.amount).slice(0, 5).map(i => ({ customer: i.party, invoice: i.ref, amount: inrText(i.amount), due: dateText(i.due), overdue: i.overdue, share_of_receivables_pct: totalRecv > 0 ? Math.round((i.amount / totalRecv) * 100) : 0 })) },
+        open_payables: { count: items.length - recv.length, largest: items.filter(i => i.kind === 'out').sort((a, b) => b.amount - a.amount).slice(0, 5).map(i => ({ vendor: i.party, bill: i.ref, amount: inrText(i.amount), due: dateText(i.due), overdue: i.overdue })) },
       };
       const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
       const resp: any = await anthropic.messages.create({ model: MODEL, max_tokens: 700, system: SYSTEM, messages: [{ role: 'user', content: JSON.stringify(facts) }] });
