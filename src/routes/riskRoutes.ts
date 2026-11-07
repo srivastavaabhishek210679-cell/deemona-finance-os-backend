@@ -88,6 +88,7 @@ export async function buildRisk(pool: Pool, t: string) {
   const spend = (await pool.query(
     `SELECT v.id::text AS id, v.name, COALESCE(v.is_blocked,false) AS blocked, (v.gstin IS NOT NULL AND v.gstin <> '') AS has_gstin, (v.pan IS NOT NULL AND v.pan <> '') AS has_pan,
             COALESCE(SUM(a.total_amount) FILTER (WHERE a.date > CURRENT_DATE - INTERVAL '12 months' AND a.status NOT IN ('draft','rejected')),0)::float8 AS spend,
+            COALESCE(SUM(a.balance_due) FILTER (WHERE a.status IN ('approved','overdue') AND a.balance_due > 0),0)::float8 AS open_bills,
             COALESCE(SUM(a.balance_due) FILTER (WHERE a.status IN ('approved','overdue') AND a.due_date < CURRENT_DATE),0)::float8 AS overdue_to_them,
             COALESCE(MAX(CURRENT_DATE - a.due_date) FILTER (WHERE a.status IN ('approved','overdue') AND a.balance_due > 0 AND a.due_date < CURRENT_DATE),0)::int AS max_days_overdue
        FROM vendors v LEFT JOIN ap_invoices a ON a.vendor_id=v.id AND a.tenant_id=v.tenant_id WHERE v.tenant_id=$1 GROUP BY v.id, v.name, v.is_blocked, v.gstin, v.pan`, [t])).rows;
@@ -101,8 +102,11 @@ export async function buildRisk(pool: Pool, t: string) {
     const seen = new Map<string, any>(); for (const b of bs) { const k = Math.round(b.amt) + '|' + b.d.slice(0, 7); if (seen.has(k)) { dup = seen.get(k).ref + ' and ' + b.ref + ' are for the same amount (' + inrText(b.amt) + ') in the same month.'; break; } seen.set(k, b); }
     const r = scoreVendor({ id: v.id, name: v.name, blocked: !!v.blocked, has_gstin: !!v.has_gstin, has_pan: !!v.has_pan, share_of_spend: totalSpend > 0 ? num(v.spend) / totalSpend : 0,
       overdue_to_them: num(v.overdue_to_them), max_days_overdue: num(v.max_days_overdue), spike, duplicate: dup });
-    return { id: v.id, name: v.name, spend_inr: inrText(num(v.spend)), spend: num(v.spend), ...r };
-  }).filter((v: any) => v.spend > 0 || v.score > 0).sort((a: any, b: any) => b.score - a.score || b.spend - a.spend).slice(0, 25);
+    return { id: v.id, name: v.name, spend_inr: inrText(num(v.spend)), spend: num(v.spend), open: num(v.open_bills), ...r };
+  }).filter((v: any) => v.spend > 0 || v.open > 0).sort((a: any, b: any) => b.score - a.score || b.spend - a.spend).slice(0, 25);
+  // Vendors with no bills are not a risk yet: just count the missing tax details so they can be filled in before the first bill.
+  const idle = spend.filter((v: any) => !(num(v.spend) > 0 || num(v.open_bills) > 0));
+  const vendor_hygiene = { idle_vendors: idle.length, missing_pan: idle.filter((v: any) => !v.has_pan).length, missing_gstin: idle.filter((v: any) => !v.has_gstin).length };
 
   // Revenue
   const m = (await pool.query(
@@ -119,7 +123,7 @@ export async function buildRisk(pool: Pool, t: string) {
   rscore = Math.round(clamp(rscore / 100, 0, 1) * 100);
   const flags = [...customers.filter((c: any) => c.band === 'High').map((c: any) => ({ kind: 'customer', name: c.name, text: 'High late-payment risk: ' + c.reasons[0] })),
                  ...vendors.filter((v: any) => v.band === 'High').map((v: any) => ({ kind: 'vendor', name: v.name, text: 'High vendor risk: ' + v.reasons[0] }))];
-  return { customers, vendors, revenue: { score: rscore, band: band(rscore), reasons: revReasons, top_customers: top.map((x: any) => ({ name: x.name, share_pct: tot12 > 0 ? Math.round(x.v / tot12 * 100) : 0 })), trend_pct: trend === null ? null : Math.round(trend) }, flags };
+  return { customers, vendors, vendor_hygiene, revenue: { score: rscore, band: band(rscore), reasons: revReasons, top_customers: top.map((x: any) => ({ name: x.name, share_pct: tot12 > 0 ? Math.round(x.v / tot12 * 100) : 0 })), trend_pct: trend === null ? null : Math.round(trend) }, flags };
 }
 
 export function createRiskRouter(pool: Pool): Router {
