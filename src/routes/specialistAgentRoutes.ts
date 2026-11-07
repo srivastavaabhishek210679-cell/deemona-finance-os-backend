@@ -67,7 +67,10 @@ async function runForecastTool(pool: Pool, tenantId: string, input: any) {
     if (!hit.length) return { error: 'No open receivable found for a customer matching "' + input.customer_name + '". Open receivables are from: ' + Array.from(new Set(recv.map(i => i.party))).join(', ') };
     const addDays = (s: string, n: number) => new Date(new Date(s + 'T00:00:00Z').getTime() + n * 86400000).toISOString().slice(0, 10);
     customItems = items.map(i => (hit.includes(i) ? { ...i, due: addDays(i.overdue ? addDays(today, 7) : i.due, custDelay), overdue: false } : i));
-    customerNote = { customer_delayed: hit[0].party, invoices_delayed: hit.length, amount_delayed_inr: inrText(hit.reduce((a, i) => a + i.amount, 0)), extra_days: custDelay, only_this_customer_is_delayed: true };
+    customerNote = { customer_delayed: hit[0].party, invoices_delayed: hit.length, amount_delayed_inr: inrText(hit.reduce((a, i) => a + i.amount, 0)), extra_days: custDelay, only_this_customer_is_delayed: true,
+      /*arrival-dates*/
+      horizon_ends: addDays(today, cl(input?.days, 90, 7, 365)),
+      invoices: hit.map(i => { const was = i.overdue ? addDays(today, 7) : i.due; const now = addDays(was, custDelay); return { invoice: i.ref, amount_inr: inrText(i.amount), expected_before: was, expected_after: now, falls_after_forecast_horizon: now > addDays(today, cl(input?.days, 90, 7, 365)) }; }) };
   }
   const base: FcOpts = { ...custom, ar_delay_days: 0, collection_pct: 100, ap_delay_days: 0 };
   const cases: Array<[string, FcOpts, typeof items]> = [
@@ -97,7 +100,7 @@ const COMMON = `HOW TO ANSWER
 - If a tool returns "available": false, "needs_data", an "error", or empty lists, say plainly what data is missing or that nothing is recorded. Do not substitute a guess.
 - Respect each tool's "definition", "basis" and "caveat" fields. The books are invoice-based, not a general ledger; salaries and taxes are not in the cash forecast unless supplied.
 - Be concise (under about 250 words unless asked for detail). Use short paragraphs and "- " bullets only. Do NOT use tables, headings, horizontal rules, emoji or code blocks: the chat window cannot display them.
-- For a question about ONE customer ("if X pays late"), call cash_forecast with customer_name and customer_delay_days. Never use ar_delay_days for that: it delays every customer. If the answer depends on a receipt falling after the forecast horizon, say so. Do not give tax, legal or investment advice; point to a qualified professional where needed.`;
+- For a question about ONE customer ("if X pays late"), call cash_forecast with customer_name and customer_delay_days. Never use ar_delay_days for that: it delays every customer. For a one-customer delay, always state the invoice number, the date the money was expected (expected_before) and the new date (expected_after). If falls_after_forecast_horizon is true, say plainly that the receipt lands after the forecast window (horizon_ends), so closing cash looks unchanged only because of the window, and offer to rerun with a longer horizon (days up to 365). Do not give tax, legal or investment advice; point to a qualified professional where needed.`;
 const AGENTS: AgentDef[] = [
   { key: 'treasury', name: 'Treasury Agent', role: 'Cash, liquidity and collections',
     blurb: 'Watches cash, runway and the 90-day forecast, and tells you which receivables to chase and which payments can wait.',
