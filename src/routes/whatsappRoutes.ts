@@ -41,6 +41,18 @@ const TEMPLATES: Record<string, (d: any) => string> = {
   custom:           d => d.message || 'Message from Deemona Finance',
 };
 
+/*twilio-signature*/
+import crypto from 'crypto';
+function xmlEscape(t: string): string { return String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+// Twilio signs: full URL + each POST param (sorted by name) as name+value, HMAC-SHA1 with the auth token, base64.
+export function twilioSignatureValid(url: string, params: Record<string, any>, signature: string, token: string): boolean {
+  if (!signature || !token) return false;
+  const data = url + Object.keys(params).sort().reduce((a, k) => a + k + String(params[k] ?? ''), '');
+  const expected = crypto.createHmac('sha1', token).update(data).digest('base64');
+  const a = Buffer.from(expected); const b = Buffer.from(String(signature));
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
 export function createWhatsAppRouter(pool: Pool): Router {
   const router = Router();
   const tid = (req: Request): string => (req as any).user.tenantId;
@@ -95,11 +107,22 @@ export function createWhatsAppRouter(pool: Pool): Router {
     });
   });
 
+  // Twilio inbound webhook: reject anything not signed by Twilio, then process APPROVE / REJECT replies.
   router.post('/webhook', async (req: Request, res: Response) => {
-    const { Body, From } = req.body;
-    console.log('[WhatsApp webhook] From:', From, 'Body:', Body);
+    const token = process.env.TWILIO_AUTH_TOKEN || '';
+    if (!token) { res.status(503).send('Webhook not configured'); return; }
+    const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'https').split(',')[0];
+    const url = process.env.TWILIO_WEBHOOK_URL || (proto + '://' + req.get('host') + req.originalUrl);
+    const sig = String(req.headers['x-twilio-signature'] || '');
+    if (!twilioSignatureValid(url, req.body || {}, sig, token)) {
+      console.warn('[WhatsApp webhook] rejected: bad signature');
+      res.status(403).send('Invalid signature'); return;
+    }
+    const { Body, From } = req.body || {};
+    let reply = 'Thank you! Your message has been received by Deemona Finance.';
+    try { reply = await handleWhatsAppApprovalReply(pool, From, String(Body || '')); } catch (e) { console.error('[WhatsApp webhook] handler error', e); }
     res.set('Content-Type', 'text/xml');
-    res.send('<Response><Message>Thank you! Your response has been recorded in Deemona Finance.</Message></Response>');
+    res.send('<Response><Message>' + xmlEscape(reply) + '</Message></Response>');
   });
 
   return router;

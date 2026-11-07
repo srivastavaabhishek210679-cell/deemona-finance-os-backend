@@ -243,7 +243,7 @@ export async function sendDailyMorningBrief(pool, tenantId) {
 
     // Gather KPIs
     const [overdue, pending, cashResult, expenseResult] = await Promise.all([
-      pool.query("SELECT COUNT(*) as cnt, COALESCE(SUM(balance_due),0) as amt FROM ar_invoices WHERE tenant_id=$1 AND status='overdue'", [tenantId]).catch(() => ({ rows: [{ cnt: 0, amt: 0 }] })),
+      pool.query("SELECT COUNT(*) as cnt, COALESCE(SUM(balance_due),0) as amt FROM ar_invoices WHERE tenant_id=$1 AND status IN ('sent','partially_paid','overdue') AND due_date < CURRENT_DATE AND balance_due > 0" /*status-logic*/, [tenantId]).catch(() => ({ rows: [{ cnt: 0, amt: 0 }] })),
       pool.query("SELECT COUNT(*) as cnt FROM ap_invoices WHERE tenant_id=$1 AND status='pending'", [tenantId]).catch(() => ({ rows: [{ cnt: 0 }] })),
       cashAsOf(pool, tenantId).then((c: any) => ({ rows: [{ cash: c.amount }] })).catch(() => ({ rows: [{ cash: 0 }] })),
       pool.query("SELECT COALESCE(SUM(total_amount),0) as amt FROM expense_claims WHERE tenant_id=$1 AND status='submitted'", [tenantId]).catch(() => ({ rows: [{ amt: 0 }] })),
@@ -334,7 +334,7 @@ export async function sendInvoicePaymentReminders(pool, tenantId) {
 
     // Get overdue AR invoices
     const overdue = await pool.query(
-      "SELECT ar.*, c.name as customer_name, c.email as customer_email FROM ar_invoices ar LEFT JOIN customers c ON ar.customer_id=c.id WHERE ar.tenant_id=$1 AND ar.status IN ('sent','overdue') AND ar.due_date < CURRENT_DATE ORDER BY ar.due_date ASC LIMIT 20",
+      "SELECT ar.*, c.name as customer_name, c.email as customer_email FROM ar_invoices ar LEFT JOIN customers c ON ar.customer_id=c.id WHERE ar.tenant_id=$1 AND ar.status IN ('sent','partially_paid','overdue') AND ar.due_date < CURRENT_DATE ORDER BY ar.due_date ASC LIMIT 20",
       [tenantId]
     ).catch(() => ({ rows: [] }));
 
@@ -530,7 +530,7 @@ export async function predictCashFlow(pool, tenantId) {
 
     // Get expected inflows (AR due in 30 days)
     const inflows = await pool.query(
-      "SELECT COALESCE(SUM(balance_due),0) as amt FROM ar_invoices WHERE tenant_id=$1 AND status IN ('sent','overdue') AND due_date <= NOW()+INTERVAL '30 days'",
+      "SELECT COALESCE(SUM(balance_due),0) as amt FROM ar_invoices WHERE tenant_id=$1 AND status IN ('sent','partially_paid','overdue') AND due_date <= NOW()+INTERVAL '30 days'",
       [tenantId]
     ).catch(() => ({ rows: [{ amt: 0 }] }));
 
@@ -778,7 +778,7 @@ export async function checkCreditLimits(pool, tenantId) {
 
     // Get customers with credit limits
     const customers = await pool.query(
-      "SELECT c.*, COALESCE(SUM(ar.balance_due),0) as outstanding FROM customers c LEFT JOIN ar_invoices ar ON ar.customer_id=c.id AND ar.status IN ('sent','overdue') WHERE c.tenant_id=$1 AND c.credit_limit > 0 GROUP BY c.id HAVING COALESCE(SUM(ar.balance_due),0) > c.credit_limit * 0.8",
+      "SELECT c.*, COALESCE(SUM(ar.balance_due),0) as outstanding FROM customers c LEFT JOIN ar_invoices ar ON ar.customer_id=c.id AND ar.status IN ('sent','partially_paid','overdue') WHERE c.tenant_id=$1 AND c.credit_limit > 0 GROUP BY c.id HAVING COALESCE(SUM(ar.balance_due),0) > c.credit_limit * 0.8",
       [tenantId]
     ).catch(() => ({ rows: [] }));
 
@@ -849,7 +849,7 @@ export async function sendInvoiceAgingReport(pool, tenantId) {
     const adminEmail = await getTenantAdminEmail(pool, tenantId);
 
     const aging = await pool.query(
-      "SELECT ar.*, c.name as customer_name, c.email as customer_email, CURRENT_DATE - ar.due_date as days_overdue FROM ar_invoices ar LEFT JOIN customers c ON ar.customer_id=c.id WHERE ar.tenant_id=$1 AND ar.status IN ('sent','overdue') AND ar.due_date < CURRENT_DATE ORDER BY days_overdue DESC LIMIT 20",
+      "SELECT ar.*, c.name as customer_name, c.email as customer_email, CURRENT_DATE - ar.due_date as days_overdue FROM ar_invoices ar LEFT JOIN customers c ON ar.customer_id=c.id WHERE ar.tenant_id=$1 AND ar.status IN ('sent','partially_paid','overdue') AND ar.due_date < CURRENT_DATE ORDER BY days_overdue DESC LIMIT 20",
       [tenantId]
     ).catch(() => ({ rows: [] }));
 
@@ -938,7 +938,7 @@ export async function generateRevenueForecast(pool, tenantId) {
 
     // Get last 6 months revenue
     const monthly = await pool.query(
-      "SELECT DATE_TRUNC('month', date) as month, SUM(total_amount) as revenue FROM ar_invoices WHERE tenant_id=$1 AND status IN ('paid','sent') AND date > NOW()-INTERVAL '6 months' GROUP BY DATE_TRUNC('month', date) ORDER BY month",
+      "SELECT DATE_TRUNC('month', date) as month, SUM(total_amount) as revenue FROM ar_invoices WHERE tenant_id=$1 AND status IN ('paid','partially_paid','sent','overdue') AND date > NOW()-INTERVAL '6 months' GROUP BY DATE_TRUNC('month', date) ORDER BY month",
       [tenantId]
     ).catch(() => ({ rows: [] }));
 
