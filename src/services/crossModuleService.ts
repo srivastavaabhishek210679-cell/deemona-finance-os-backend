@@ -34,6 +34,7 @@ export async function postPayrollToGL(pool: Pool, tenantId: string, payrollRunId
 }
 
 export async function postAPPaymentToTreasury(pool: Pool, tenantId: string, apInvoiceId: string, bankAccountId: string, paymentRef: string, actorId: string): Promise<void> {
+  if (process.env.BANK_DATA_DISABLED !== 'false') return; /*bankoff*/
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -54,6 +55,7 @@ export async function postAPPaymentToTreasury(pool: Pool, tenantId: string, apIn
 }
 
 export async function postARReceiptToTreasury(pool: Pool, tenantId: string, arInvoiceId: string, bankAccountId: string, paymentRef: string, amount: number, actorId: string): Promise<void> {
+  if (process.env.BANK_DATA_DISABLED !== 'false') return; /*bankoff*/
   const client = await pool.connect();
   try {
     await client.query('BEGIN');

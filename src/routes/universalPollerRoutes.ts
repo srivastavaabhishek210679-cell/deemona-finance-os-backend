@@ -12,7 +12,7 @@ const IDENT = /^[a-z_][a-z0-9_]{0,62}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ALLOWED_TABLES = new Set<string>([
   'ar_invoices', 'ap_invoices', 'customers', 'vendors', 'employees', 'expenses', 'crm_leads',
-  'journal_entries', 'purchase_orders', 'inventory_items', 'bank_transactions', 'payments',
+  'journal_entries', 'purchase_orders', 'inventory_items', 'payments', /*bankoff*/
   ...String(process.env.ALLOWED_POLLER_TABLES || '').split(',').map(s => s.trim()).filter(s => IDENT.test(s)),
 ]);
 const PROTECTED_COLUMNS = new Set(['tenant_id', 'id']);

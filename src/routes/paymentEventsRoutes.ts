@@ -76,7 +76,7 @@ export function createPaymentEventsRouter(pool: Pool): Router {
       await client.query(`UPDATE ${table} SET paid_amount = $1, status = $2, updated_at = NOW() WHERE id = $3 AND tenant_id = $4`, [newPaid, newStatus, invoice_id, t]);
 
       let bank: any = null;
-      if (bank_account_id) {
+      if (bank_account_id && process.env.BANK_DATA_DISABLED === 'false') { /*bankoff*/
         const ba = await client.query(`SELECT current_balance FROM bank_accounts WHERE id = $1 AND tenant_id = $2 FOR UPDATE`, [bank_account_id, t]);
         if (!ba.rows.length) { await fail(404, 'Bank account not found'); return; }
         const newBal = Number(ba.rows[0].current_balance) + (isAr ? amt : -amt);

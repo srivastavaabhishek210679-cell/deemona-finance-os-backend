@@ -56,6 +56,7 @@ export function createTreasuryRouter(pool: Pool): Router {
   });
 
   router.post('/bank-accounts', requireAuth, async (req: Request, res: Response) => {
+    if (process.env.BANK_DATA_DISABLED !== 'false') { res.status(410).json({ error: 'Bank data storage is disabled' }); return; } /*bankoff*/
     try {
       const { name, account_number, ifsc, bank_name, branch, account_type, opening_balance, upi_id, notes, is_primary } = req.body;
       const result = await pool.query(
@@ -68,6 +69,7 @@ export function createTreasuryRouter(pool: Pool): Router {
   });
 
   router.patch('/bank-accounts/:id', requireAuth, async (req: Request, res: Response) => {
+    if (process.env.BANK_DATA_DISABLED !== 'false') { res.status(410).json({ error: 'Bank data storage is disabled' }); return; } /*bankoff*/
     try {
       const { current_balance, name, notes, is_primary } = req.body;
       const result = await pool.query(
@@ -93,6 +95,7 @@ export function createTreasuryRouter(pool: Pool): Router {
   });
 
   router.post('/transactions', requireAuth, async (req: Request, res: Response) => {
+    if (process.env.BANK_DATA_DISABLED !== 'false') { res.status(410).json({ error: 'Bank data storage is disabled' }); return; } /*bankoff*/
     const client = await pool.connect();
     try {
       await client.query('BEGIN');

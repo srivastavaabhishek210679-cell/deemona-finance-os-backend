@@ -430,7 +430,8 @@ Respond with only the label, nothing else.`
             break;
           }
 
-          case 'BANK_TRANSACTIONS': {
+          case 'BANK_TRANSACTIONS': { break; } /*bankoff*/
+          case '__bank_disabled__': {
             const date = parseDate(get(row, 'date')) || new Date().toISOString().split('T')[0];
             const debit = parseAmt(get(row, 'debit'));
             const credit = parseAmt(get(row, 'credit'));
