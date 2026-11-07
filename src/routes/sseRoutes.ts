@@ -68,7 +68,7 @@ export function createSSERouter(pool) {
     if (!sseClients.has(tenantId)) sseClients.set(tenantId, new Set());
     sseClients.get(tenantId).add(res);
     res.write(`data: ${JSON.stringify({ type: 'connected', ts: new Date().toISOString() })}\n\n`);
-    const hb = setInterval(() => { try { res.write(`data: ${JSON.stringify({ type: 'heartbeat' })}\n\n`); } catch { clearInterval(hb); } }, 30000);
+    const hb = setInterval(() => { try { res.write(`data: ${JSON.stringify({ type: 'heartbeat' })}\n\n`); } catch { clearInterval(hb); } }, 15000);
     req.on('close', () => { clearInterval(hb); sseClients.get(tenantId)?.delete(res); console.log('[SSE] Disconnected:', tenantId?.substring(0,8)); });
   });
   return router;
