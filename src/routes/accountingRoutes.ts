@@ -320,6 +320,66 @@ export function createAccountingRouter(pool: Pool): Router {
     } catch (err) { res.status(500).json({ error: String(err) }); }
   });
 
+  router.delete('/ar-invoices/:id', requireAuth, async (req: Request, res: Response) => {
+    const client = await pool.connect();
+    try {
+      const id = String(req.params.id);
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) { res.status(404).json({ error: 'Not found' }); return; }
+      await client.query('BEGIN');
+      const inv = await client.query(`SELECT id, invoice_number, paid_amount FROM ar_invoices WHERE id = $1 AND tenant_id = $2 FOR UPDATE`, [id, tid(req)]);
+      if (!inv.rows.length) { await client.query('ROLLBACK'); res.status(404).json({ error: 'Invoice not found' }); return; }
+      let events = 0;
+      try {
+        const ev = await client.query(`SELECT COUNT(*)::int AS n FROM invoice_payment_events WHERE tenant_id = $1 AND invoice_type = 'ar' AND invoice_id = $2`, [tid(req), id]);
+        events = ev.rows[0].n;
+      } catch { /* payment events table not created yet */ await client.query('ROLLBACK'); await client.query('BEGIN'); }
+      if (Number(inv.rows[0].paid_amount || 0) > 0 || events > 0) {
+        await client.query('ROLLBACK');
+        res.status(409).json({ error: 'This invoice has payments recorded, so it cannot be deleted.' });
+        return;
+      }
+      await client.query(`DELETE FROM ar_invoice_lines WHERE ar_invoice_id = $1`, [id]);
+      await client.query(`DELETE FROM ar_invoices WHERE id = $1 AND tenant_id = $2`, [id, tid(req)]);
+      await client.query('COMMIT');
+      console.log('[accounting] invoice ' + inv.rows[0].invoice_number + ' deleted by ' + ((req as any).user.email || (req as any).user.id));
+      res.json({ deleted: true, invoice_number: inv.rows[0].invoice_number });
+    } catch (err: any) {
+      await client.query('ROLLBACK').catch(() => {});
+      if (err && err.code === '23503') { res.status(409).json({ error: 'This record is linked to other records (such as payments), so it cannot be deleted.' }); return; }
+      res.status(500).json({ error: String(err) });
+    } finally { client.release(); }
+  });
+
+  router.delete('/ap-invoices/:id', requireAuth, async (req: Request, res: Response) => {
+    const client = await pool.connect();
+    try {
+      const id = String(req.params.id);
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) { res.status(404).json({ error: 'Not found' }); return; }
+      await client.query('BEGIN');
+      const inv = await client.query(`SELECT id, invoice_number, paid_amount FROM ap_invoices WHERE id = $1 AND tenant_id = $2 FOR UPDATE`, [id, tid(req)]);
+      if (!inv.rows.length) { await client.query('ROLLBACK'); res.status(404).json({ error: 'Bill not found' }); return; }
+      let events = 0;
+      try {
+        const ev = await client.query(`SELECT COUNT(*)::int AS n FROM invoice_payment_events WHERE tenant_id = $1 AND invoice_type = 'ap' AND invoice_id = $2`, [tid(req), id]);
+        events = ev.rows[0].n;
+      } catch { /* payment events table not created yet */ await client.query('ROLLBACK'); await client.query('BEGIN'); }
+      if (Number(inv.rows[0].paid_amount || 0) > 0 || events > 0) {
+        await client.query('ROLLBACK');
+        res.status(409).json({ error: 'This bill has payments recorded, so it cannot be deleted.' });
+        return;
+      }
+      await client.query(`DELETE FROM ap_invoice_lines WHERE ap_invoice_id = $1`, [id]);
+      await client.query(`DELETE FROM ap_invoices WHERE id = $1 AND tenant_id = $2`, [id, tid(req)]);
+      await client.query('COMMIT');
+      console.log('[accounting] bill ' + inv.rows[0].invoice_number + ' deleted by ' + ((req as any).user.email || (req as any).user.id));
+      res.json({ deleted: true, invoice_number: inv.rows[0].invoice_number });
+    } catch (err: any) {
+      await client.query('ROLLBACK').catch(() => {});
+      if (err && err.code === '23503') { res.status(409).json({ error: 'This record is linked to other records (such as payments), so it cannot be deleted.' }); return; }
+      res.status(500).json({ error: String(err) });
+    } finally { client.release(); }
+  });
+
   router.patch('/ap-invoices/:id/approve', requireAuth, async (req: Request, res: Response) => {
     try {
       const result = await pool.query(
