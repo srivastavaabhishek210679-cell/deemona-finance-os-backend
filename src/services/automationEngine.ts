@@ -329,61 +329,15 @@ export async function sendWeeklyDigest(pool, tenantId) {
 
 // ── BATCH 1: Invoice Payment Reminders ───────────────────────
 export async function sendInvoicePaymentReminders(pool, tenantId) {
+  /*autopilot*/
+  // Customer reminders now run through Autopilot: off by default, capped per day, every action logged (services/autopilot.ts).
   try {
-    const adminEmail = await getTenantAdminEmail(pool, tenantId);
-
-    // Get overdue AR invoices
-    const overdue = await pool.query(
-      "SELECT ar.*, c.name as customer_name, c.email as customer_email FROM ar_invoices ar LEFT JOIN customers c ON ar.customer_id=c.id WHERE ar.tenant_id=$1 AND ar.status IN ('sent','partially_paid','overdue') AND ar.due_date < CURRENT_DATE ORDER BY ar.due_date ASC LIMIT 20",
-      [tenantId]
-    ).catch(() => ({ rows: [] }));
-
-    for (const inv of overdue.rows) {
-      const daysOverdue = Math.ceil((Date.now() - new Date(inv.due_date).getTime()) / 86400000);
-      const amount = parseFloat(inv.total_amount || inv.balance_due || 0);
-      const customerEmail = inv.customer_email;
-
-      // Check if reminder already sent today
-      const alreadySent = await pool.query(
-        "SELECT id FROM automation_logs WHERE automation_type='PAYMENT_REMINDER' AND detail LIKE $1 AND created_at > NOW()-INTERVAL '24 hours'",
-        ['%' + inv.id + '%']
-      ).catch(() => ({ rows: [] }));
-      if (alreadySent.rows.length > 0) continue;
-
-      if (customerEmail) {
-        const isEscalation = daysOverdue >= 90;
-        const subject = isEscalation
-          ? 'URGENT: Invoice ' + inv.invoice_number + ' overdue by ' + daysOverdue + ' days'
-          : 'Payment Reminder: Invoice ' + inv.invoice_number + ' due ' + daysOverdue + ' days ago';
-
-        await sendEmail(customerEmail, subject,
-          '<div style="font-family:Arial;padding:20px;background:' + (isEscalation ? '#FEF2F2' : '#FFFBEB') + ';border-left:4px solid ' + (isEscalation ? '#DC2626' : '#D97706') + '">' +
-          '<h2 style="color:' + (isEscalation ? '#DC2626' : '#D97706') + '">' + (isEscalation ? 'URGENT: ' : '') + 'Payment Reminder</h2>' +
-          '<p>Dear ' + (inv.customer_name || 'Customer') + ',</p>' +
-          '<p>This is a reminder that Invoice <strong>' + inv.invoice_number + '</strong> for <strong>Rs ' + amount.toLocaleString('en-IN') + '</strong> was due on ' + new Date(inv.due_date).toLocaleDateString('en-IN') + ' (' + daysOverdue + ' days ago).</p>' +
-          (isEscalation ? '<p style="color:#DC2626;font-weight:bold">This invoice is significantly overdue. Please make payment immediately to avoid further action.</p>' : '') +
-          '<p>Please process payment at your earliest convenience.</p>' +
-          '<p style="color:#64748B;font-size:12px">Deemona AI Finance OS | Automated Reminder</p></div>'
-        );
-      }
-
-      // Also alert CFO if 90+ days
-      if (daysOverdue >= 90) {
-        await sendEmail(adminEmail, 'ESCALATION: Invoice ' + inv.invoice_number + ' overdue ' + daysOverdue + ' days',
-          '<div style="font-family:Arial;padding:20px;background:#FEF2F2;border-left:4px solid #DC2626">' +
-          '<h2 style="color:#DC2626">Invoice Escalation Alert</h2>' +
-          '<p>Invoice <strong>' + inv.invoice_number + '</strong> from <strong>' + (inv.customer_name || 'Customer') + '</strong> is <strong>' + daysOverdue + ' days overdue</strong>.</p>' +
-          '<p>Amount: <strong>Rs ' + amount.toLocaleString('en-IN') + '</strong></p>' +
-          '<p>Immediate follow-up required.</p></div>'
-        );
-      }
-
-      await logAutomation(pool, tenantId, 'PAYMENT_REMINDER', 'sent', 'Reminder for invoice ' + inv.invoice_number + ' | ' + inv.id);
-    }
+    const { runAutopilotReminders } = await import('./autopilot');
+    const r = await runAutopilotReminders(pool, tenantId, { sendEmail, getAdminEmail: getTenantAdminEmail });
+    if ((r as any).ran) await logAutomation(pool, tenantId, 'PAYMENT_REMINDER', 'sent', 'Autopilot sent ' + (r as any).sent + ' of ' + (r as any).eligible + ' eligible reminders');
   } catch (e) { console.error('[Automation] Payment reminders error:', e); }
 }
 
-// ── BATCH 1: Payslip Auto-Distribution ───────────────────────
 export async function distributePayslips(pool, tenantId) {
   try {
     // Get latest payroll run
