@@ -69,12 +69,15 @@ export async function buildCommandCenter(pool: Pool, tenantId: string, dropPct: 
   }
 
   // 3. Revenue drop
-  if (!haveRates) {
-    cards.push({ key: 'revenue_drop', question: 'What happens if revenue drops ' + dropPct + '%?', headline: 'Not enough history to estimate.', needs_data: true, details: ['This needs at least one completed month of invoices and costs.'] });
-  } else {
+  const thin = !(used.length >= 3 && R > 0 && C > 0);
+  const thinNote = 'Based on very limited history (typical month: revenue ' + inrText(R) + ', costs ' + inrText(C) + '), so treat this as a rough guide only.';
+  if (!haveRates || R <= 0) {
+    cards.push({ key: 'revenue_drop', question: 'What happens if revenue drops ' + dropPct + '%?', headline: "No recent revenue to reduce, so this test can't be run yet.", needs_data: true, details: ['No invoices were raised in the last completed months. Once there is revenue history, this shows the effect of a ' + dropPct + '% drop.'] });
+  }
+  if (haveRates) {
     const base = runForecast(opening.amount, items, OPTS(R, C), today);
     const down = runForecast(opening.amount, items, OPTS(R * (1 - dropPct / 100), C), today);
-    cards.push({ key: 'revenue_drop', question: 'What happens if revenue drops ' + dropPct + '%?',
+    if (R > 0) cards.push({ key: 'revenue_drop', question: 'What happens if revenue drops ' + dropPct + '%?',
       headline: 'New sales fall by ' + inrText(R * dropPct / 100) + ' a month, so cash after 12 months is ' + inrText(down.closing) + ' instead of ' + inrText(base.closing) + ' (' + inrText(down.closing - base.closing) + ').',
       details: ['As things stand, ' + lastsUntil(base, today) + '. With the drop, ' + lastsUntil(down, today) + '.', down.first_negative ? 'The funding gap at the lowest point would be ' + inrText(-down.lowest.amount) + ' on ' + longDate(down.lowest.date) + '.' : 'Lowest cash with the drop: ' + inrText(down.lowest.amount) + ' on ' + longDate(down.lowest.date) + '.'] });
 
@@ -82,14 +85,14 @@ export async function buildCommandCenter(pool: Pool, tenantId: string, dropPct: 
     const none = runForecast(opening.amount, items, OPTS(0, C), today);
     const noCollect = runForecast(opening.amount, items, OPTS(0, C, 0), today);
     cards.push({ key: 'no_sales', question: 'How long can we survive with no sales?',
-      headline: none.first_negative ? 'About ' + daysBetween(today, none.first_negative) + ' days: ' + lastsUntil(none, today) + '.' : 'More than 12 months: ' + lastsUntil(none, today) + '.',
-      details: ['This assumes no new sales, typical monthly costs of ' + inrText(C) + ', and open invoices still paid on their due dates.', 'If no open invoice were paid either, ' + lastsUntil(noCollect, today) + '.'] });
+      headline: none.first_negative ? 'About ' + daysBetween(today, none.first_negative) + ' days: ' + lastsUntil(none, today) + '.' : 'More than 12 months at typical costs.',
+      details: ['This assumes no new sales, typical monthly costs of ' + inrText(C) + ', and open invoices still paid on their due dates.', 'If no open invoice were paid either, ' + lastsUntil(noCollect, today) + '.'].concat(thin ? [thinNote] : []) });
 
     // 5. Funding
     const need = base.first_negative ? -base.lowest.amount : 0;
     cards.push({ key: 'funding', question: 'When will we need funding?',
       headline: base.first_negative ? 'On current trends, from ' + longDate(base.first_negative) + '. The gap reaches ' + inrText(need) + ' by ' + longDate(base.lowest.date) + '.' : 'Not in the next 12 months on current trends. Lowest cash is ' + inrText(base.lowest.amount) + ' on ' + longDate(base.lowest.date) + '.',
-      details: [down.first_negative && !base.first_negative ? 'A ' + dropPct + '% revenue drop would change that: funding would be needed from ' + longDate(down.first_negative) + '.' : 'Tax payments and any planned spending outside invoices and payroll are not included.'] });
+      details: [down.first_negative && !base.first_negative ? 'A ' + dropPct + '% revenue drop would change that: funding would be needed from ' + longDate(down.first_negative) + '.' : 'Tax payments and any planned spending outside invoices and payroll are not included.'].concat(thin ? [thinNote] : []) });
   }
   return { as_of: today, assumptions, cards };
 }
