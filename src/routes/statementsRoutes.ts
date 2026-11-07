@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { Pool } from 'pg';
 import { requireAuth } from '../middleware/auth';
+import { cashAsOf } from '../services/cashPosition';
 import { ensurePaymentEventsTable } from './paymentEventsRoutes';
 
 export function createStatementsRouter(pool: Pool): Router {
@@ -136,10 +137,9 @@ export function createStatementsRouter(pool: Pool): Router {
       let apUnknown = { count: 0, total: 0 };
       let bankBals: any, arBal: any, apBal: any;
       if (!isPast) {
-        bankBals = await pool.query(`
-          SELECT COALESCE(SUM(current_balance), 0) as total
-          FROM bank_accounts WHERE tenant_id = $1 AND is_active = TRUE
-        `, [tenantId]);
+        const c0 = await cashAsOf(pool, tenantId, asOf);
+        bankBals = { rows: [{ total: c0.amount }] };
+        if (!c0.has_entry) warnings.push('Cash and bank balance has not been entered, so cash is shown as 0. Add it on the Cash Balance page.');
         arBal = await pool.query(`
           SELECT COALESCE(SUM(balance_due), 0) as total FROM ar_invoices
           WHERE tenant_id = $1 AND status NOT IN ('paid','cancelled')
@@ -150,20 +150,10 @@ export function createStatementsRouter(pool: Pool): Router {
         `, [tenantId]);
       } else {
         await ensurePaymentEventsTable(pool);
-        const cash = await pool.query(`
-          SELECT COALESCE(SUM(b.opening_balance + COALESCE(m.net, 0)), 0) AS total,
-                 COALESCE(SUM(b.current_balance - (b.opening_balance + COALESCE(a.net, 0))), 0) AS drift,
-                 (SELECT MIN(date)::text FROM bank_transactions WHERE tenant_id = $1) AS first_txn
-          FROM bank_accounts b
-          LEFT JOIN (SELECT bank_account_id, SUM(CASE WHEN type = 'credit' THEN amount ELSE -amount END) AS net
-                     FROM bank_transactions WHERE tenant_id = $1 AND date <= $2 GROUP BY bank_account_id) m ON m.bank_account_id = b.id
-          LEFT JOIN (SELECT bank_account_id, SUM(CASE WHEN type = 'credit' THEN amount ELSE -amount END) AS net
-                     FROM bank_transactions WHERE tenant_id = $1 GROUP BY bank_account_id) a ON a.bank_account_id = b.id
-          WHERE b.tenant_id = $1 AND b.is_active = TRUE
-        `, [tenantId, asOf]);
-        bankBals = { rows: [{ total: cash.rows[0].total }] };
-        if (Math.abs(parseFloat(cash.rows[0].drift)) >= 1) warnings.push('Bank balances do not match the recorded bank transactions, so cash for a past date is approximate.');
-        if (cash.rows[0].first_txn && asOf < cash.rows[0].first_txn) warnings.push('No bank transactions are recorded before ' + cash.rows[0].first_txn + '; cash shown is the opening balance.');
+        const c1 = await cashAsOf(pool, tenantId, asOf);
+        bankBals = { rows: [{ total: c1.amount }] };
+        if (!c1.has_entry) warnings.push('No cash balance was entered on or before ' + asOf + ', so cash is shown as 0. Add a balance on the Cash Balance page.');
+        else if (c1.entry_date !== asOf) warnings.push('Cash is the balance entered on ' + c1.entry_date + ' plus receipts and payments recorded since.');
         const settled = async (tbl: string, type: string, skip: string) => (await pool.query(`
           WITH inv AS (
             SELECT i.total_amount, i.paid_amount, i.status AS inv_status,

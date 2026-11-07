@@ -6,6 +6,8 @@
 // { available:false, needs_data:[...] } so the agent says so honestly.
 // ============================================================
 import { Pool } from 'pg';
+import { cashAsOf } from './cashPosition';
+import { ensurePaymentEventsTable } from '../routes/paymentEventsRoutes';
 import {
   ensureCfoSetupTables, DIM_KINDS, DimKind, DIM_COLUMN, TARGET_METRICS, FORECAST_METRICS, PERIOD_TYPES,
   istTodayYmd, currentPeriodStart, periodEnd, daysBetweenInclusive, addMonthsYmd,
@@ -45,7 +47,7 @@ const needsData = (what: string[], reason: string): Json => ({ available: false,
 // Reusable core numbers -----------------------------------------------------
 async function coreNumbers(pool: Pool, t: string) {
   const [bank, ar, ap, sales, purchases, inv] = await Promise.all([
-    rows(pool, `SELECT COALESCE(SUM(current_balance),0) AS v FROM bank_accounts WHERE tenant_id=$1 AND is_active=TRUE`, [t]),
+    cashAsOf(pool, t).then(c => [{ v: c.amount }]),
     rows(pool, `SELECT COALESCE(SUM(balance_due),0) AS outstanding,
                 COALESCE(SUM(balance_due) FILTER (WHERE due_date::date < CURRENT_DATE),0) AS overdue
                 FROM ar_invoices WHERE tenant_id=$1 AND status NOT IN ('paid','cancelled','draft')`, [t]),
@@ -128,9 +130,9 @@ async function actualMetric(pool: Pool, t: string, metric: string, from: string,
       return one(`SELECT COALESCE(SUM(total_gross),0) AS v FROM payroll_runs WHERE tenant_id=$1
                   AND make_date(year, month, 1) >= date_trunc('month', $2::date) AND make_date(year, month, 1) <= $3::date`, [t, from, to]);
     case 'cash_in':
-      return one(`SELECT COALESCE(SUM(amount),0) AS v FROM bank_transactions WHERE tenant_id=$1 AND type='credit' AND date::date BETWEEN $2 AND $3`, [t, from, to]);
+      return one(`SELECT COALESCE(SUM(amount),0) AS v FROM invoice_payment_events WHERE tenant_id=$1 AND invoice_type='ar' AND payment_date BETWEEN $2 AND $3`, [t, from, to]);
     case 'cash_out':
-      return one(`SELECT COALESCE(SUM(amount),0) AS v FROM bank_transactions WHERE tenant_id=$1 AND type='debit' AND date::date BETWEEN $2 AND $3`, [t, from, to]);
+      return one(`SELECT COALESCE(SUM(amount),0) AS v FROM invoice_payment_events WHERE tenant_id=$1 AND invoice_type='ap' AND payment_date BETWEEN $2 AND $3`, [t, from, to]);
     case 'ebitda': {
       const [rev, ven, pay, clm] = await Promise.all([
         actualMetric(pool, t, 'revenue', from, to), actualMetric(pool, t, 'vendor_costs', from, to), actualMetric(pool, t, 'payroll', from, to),
@@ -167,17 +169,13 @@ export async function recordForecasts(pool: Pool, tenantId: string): Promise<num
 export const METRICS: Record<string, Metric> = {
 
   cash_position: {
-    description: 'Current cash across active bank accounts, per-account balances, and accounts with unusually low or negative balances.',
+    description: 'Current cash: the balance the user entered manually plus receipts less payments recorded since. No bank data is held.',
     input_schema: { type: 'object', properties: { low_threshold: { type: 'number', description: 'Flag accounts below this INR balance. Default: 25% of the mean account balance.' } } },
     async run(pool, t, input) {
-      const accts = await rows(pool, `SELECT name, account_type, current_balance, is_primary FROM bank_accounts WHERE tenant_id=$1 AND is_active=TRUE ORDER BY current_balance ASC`, [t]);
-      const total = accts.reduce((s, a) => s + num(a.current_balance), 0);
-      const mean = accts.length ? total / accts.length : 0;
-      const thr = input?.low_threshold !== undefined ? num(input.low_threshold) : mean * 0.25;
+      const c = await cashAsOf(pool, t);
       return {
-        total_cash: total, account_count: accts.length, low_balance_threshold: round(thr, 0),
-        accounts: accts.map(a => ({ name: a.name, type: a.account_type, balance: num(a.current_balance), primary: a.is_primary })),
-        low_balance_accounts: accts.filter(a => num(a.current_balance) < thr).map(a => ({ name: a.name, balance: num(a.current_balance) })),
+        total_cash: c.amount, cash_entered: c.has_entry, balance_entered_on: c.entry_date, balance_entered: c.entry_amount,
+        receipts_less_payments_since: c.movement, note: c.has_entry ? undefined : 'No cash balance has been entered yet. Ask the user to add it on the Cash Balance page; cash is shown as 0 until then.',
         as_of: new Date().toISOString(),
       };
     },
@@ -188,8 +186,8 @@ export const METRICS: Record<string, Metric> = {
     input_schema: { type: 'object', properties: {} },
     async run(pool, t) {
       const [bank, tx, payroll] = await Promise.all([
-        rows(pool, `SELECT COALESCE(SUM(current_balance),0) AS v FROM bank_accounts WHERE tenant_id=$1 AND is_active=TRUE`, [t]),
-        rows(pool, `SELECT type, COALESCE(SUM(amount),0) AS total FROM bank_transactions WHERE tenant_id=$1 AND date::date >= CURRENT_DATE - 90 GROUP BY type`, [t]),
+        cashAsOf(pool, t).then(c => [{ v: c.amount }]),
+        rows(pool, `SELECT CASE WHEN invoice_type='ar' THEN 'credit' ELSE 'debit' END AS type, COALESCE(SUM(amount),0) AS total FROM invoice_payment_events WHERE tenant_id=$1 AND payment_date >= CURRENT_DATE - 90 GROUP BY 1`, [t]),
         rows(pool, `SELECT total_gross FROM payroll_runs WHERE tenant_id=$1 ORDER BY year DESC, month DESC LIMIT 1`, [t]),
       ]);
       const cash = num(bank[0].v);
@@ -203,7 +201,7 @@ export const METRICS: Record<string, Metric> = {
         runway_days_gross: grossOut > 0 ? Math.round((cash / grossOut) * 30) : null,
         runway_days_net: netBurn > 0 ? Math.round((cash / netBurn) * 30) : null,
         cash_flow_positive: netBurn <= 0,
-        basis: out > 0 ? 'bank transactions, last 90 days (transfers between own accounts, if recorded, inflate both sides)' : 'latest payroll run only (no bank transactions found)',
+        basis: out > 0 ? 'recorded receipts and payments, last 90 days' : 'latest payroll run only (no receipts or payments recorded)',
       };
     },
   },
@@ -241,12 +239,12 @@ export const METRICS: Record<string, Metric> = {
       const days = clampInt(input?.days, 30, 1, 90);
       const rate = Math.min(1, Math.max(0, input?.ar_collection_rate !== undefined ? num(input.ar_collection_rate) : 0.7));
       const [bank, ap, ar, tx] = await Promise.all([
-        rows(pool, `SELECT COALESCE(SUM(current_balance),0) AS v FROM bank_accounts WHERE tenant_id=$1 AND is_active=TRUE`, [t]),
+        cashAsOf(pool, t).then(c => [{ v: c.amount }]),
         rows(pool, `SELECT GREATEST(due_date::date, CURRENT_DATE) AS d, SUM(balance_due) AS amt FROM ap_invoices
                     WHERE tenant_id=$1 AND status NOT IN ('paid','rejected','draft') AND due_date::date <= CURRENT_DATE + $2::int GROUP BY 1`, [t, days]),
         rows(pool, `SELECT GREATEST(due_date::date, CURRENT_DATE) AS d, SUM(balance_due) AS amt FROM ar_invoices
                     WHERE tenant_id=$1 AND status NOT IN ('paid','cancelled','draft') AND due_date::date <= CURRENT_DATE + $2::int GROUP BY 1`, [t, days]),
-        rows(pool, `SELECT COALESCE(SUM(amount),0) AS v FROM bank_transactions WHERE tenant_id=$1 AND type='debit' AND date::date >= CURRENT_DATE - 90`, [t]),
+        rows(pool, `SELECT COALESCE(SUM(amount),0) AS v FROM invoice_payment_events WHERE tenant_id=$1 AND invoice_type='ap' AND payment_date >= CURRENT_DATE - 90`, [t]),
       ]);
       const key = (d: any) => ymd(new Date(d));
       const apBy: Record<string, number> = {}; ap.forEach(r => { apBy[key(r.d)] = num(r.amt); });
@@ -414,8 +412,8 @@ export const METRICS: Record<string, Metric> = {
       const { cur, prev } = pr;
       const sqlByMeasure: Record<string, string> = {
         revenue: `SELECT COALESCE(SUM(subtotal),0) AS v, COUNT(*) AS n FROM ar_invoices WHERE tenant_id=$1 AND status NOT IN ('draft','cancelled') AND date::date BETWEEN $2 AND $3`,
-        cash_in: `SELECT COALESCE(SUM(amount),0) AS v, COUNT(*) AS n FROM bank_transactions WHERE tenant_id=$1 AND type='credit' AND date::date BETWEEN $2 AND $3`,
-        cash_out: `SELECT COALESCE(SUM(amount),0) AS v, COUNT(*) AS n FROM bank_transactions WHERE tenant_id=$1 AND type='debit' AND date::date BETWEEN $2 AND $3`,
+        cash_in: `SELECT COALESCE(SUM(amount),0) AS v, COUNT(*) AS n FROM invoice_payment_events WHERE tenant_id=$1 AND invoice_type='ar' AND payment_date BETWEEN $2 AND $3`,
+        cash_out: `SELECT COALESCE(SUM(amount),0) AS v, COUNT(*) AS n FROM invoice_payment_events WHERE tenant_id=$1 AND invoice_type='ap' AND payment_date BETWEEN $2 AND $3`,
         ap_invoiced: `SELECT COALESCE(SUM(subtotal),0) AS v, COUNT(*) AS n FROM ap_invoices WHERE tenant_id=$1 AND status NOT IN ('draft','rejected') AND date::date BETWEEN $2 AND $3`,
       };
       const sql = sqlByMeasure[input?.measure];
@@ -446,8 +444,8 @@ export const METRICS: Record<string, Metric> = {
       const limit = clampInt(input?.limit, 5, 1, 20);
       const [tot, inflows, outflows, cats] = await Promise.all([
         rows(pool, `SELECT type, COALESCE(SUM(amount),0) AS total, COUNT(*) AS n FROM bank_transactions WHERE tenant_id=$1 AND date::date BETWEEN $2 AND $3 GROUP BY type`, [t, from, to]),
-        rows(pool, `SELECT date::date::text AS date, description, category, amount FROM bank_transactions WHERE tenant_id=$1 AND type='credit' AND date::date BETWEEN $2 AND $3 ORDER BY amount DESC LIMIT $4`, [t, from, to, limit]),
-        rows(pool, `SELECT date::date::text AS date, description, category, amount FROM bank_transactions WHERE tenant_id=$1 AND type='debit' AND date::date BETWEEN $2 AND $3 ORDER BY amount DESC LIMIT $4`, [t, from, to, limit]),
+        rows(pool, `SELECT date::date::text AS date, description, category, amount FROM invoice_payment_events WHERE tenant_id=$1 AND invoice_type='ar' AND payment_date BETWEEN $2 AND $3 ORDER BY amount DESC LIMIT $4`, [t, from, to, limit]),
+        rows(pool, `SELECT date::date::text AS date, description, category, amount FROM invoice_payment_events WHERE tenant_id=$1 AND invoice_type='ap' AND payment_date BETWEEN $2 AND $3 ORDER BY amount DESC LIMIT $4`, [t, from, to, limit]),
         rows(pool, `SELECT COALESCE(category,'uncategorised') AS category,
                            SUM(CASE WHEN type='credit' THEN amount ELSE -amount END) AS net
                     FROM bank_transactions WHERE tenant_id=$1 AND date::date BETWEEN $2 AND $3 GROUP BY 1 ORDER BY ABS(SUM(CASE WHEN type='credit' THEN amount ELSE -amount END)) DESC LIMIT 10`, [t, from, to]),
@@ -855,6 +853,7 @@ export function startCfoSnapshotJob(pool: Pool): void {
 }
 
 export async function runMetric(pool: Pool, tenantId: string, name: string, input: any): Promise<Json> {
+  await ensurePaymentEventsTable(pool).catch(() => {});
   const m = METRICS[name];
   if (!m) return { error: `unknown metric ${name}` };
   try { return await m.run(pool, tenantId, input || {}); }
