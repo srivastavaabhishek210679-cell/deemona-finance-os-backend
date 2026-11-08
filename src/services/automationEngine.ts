@@ -1224,7 +1224,7 @@ export async function registerAutomationCrons(pool) {
 
   setInterval(async () => {
     try {
-      const tenants = await pool.query('SELECT id FROM tenants LIMIT 20');
+      const tenants = await pool.query('SELECT id FROM tenants ORDER BY created_at LIMIT 1000');
       for (const tenant of tenants.rows) {
         await checkLowCashAlert(pool, tenant.id).catch(() => {});
         await checkComplianceAlerts(pool, tenant.id).catch(() => {});
@@ -1235,7 +1235,7 @@ export async function registerAutomationCrons(pool) {
 
   setInterval(async () => {
     try {
-      const tenants = await pool.query('SELECT id FROM tenants LIMIT 20');
+      const tenants = await pool.query('SELECT id FROM tenants ORDER BY created_at LIMIT 1000');
       for (const tenant of tenants.rows) {
         await runBankReconciliation(pool, tenant.id).catch(() => {});
       }
@@ -1247,7 +1247,7 @@ export async function registerAutomationCrons(pool) {
     const utcHour = now.getUTCHours();
     const day = now.getUTCDate();
     try {
-      const tenants = await pool.query('SELECT id FROM tenants LIMIT 20');
+      const tenants = await pool.query('SELECT id FROM tenants ORDER BY created_at LIMIT 1000');
       for (const tenant of tenants.rows) {
         const adminEmail = await getTenantAdminEmail(pool, tenant.id);
         if (day === 13 && utcHour === 3) {
@@ -1277,7 +1277,7 @@ export async function registerAutomationCrons(pool) {
     const now = new Date();
     if (now.getUTCHours() === 2 && now.getUTCMinutes() < 16) {
       try {
-        const tenants = await pool.query('SELECT id FROM tenants LIMIT 20');
+        const tenants = await pool.query('SELECT id FROM tenants ORDER BY created_at LIMIT 1000');
         for (const t of tenants.rows) {
           await sendDailyMorningBrief(pool, t.id).catch(() => {});
           await sendInvoicePaymentReminders(pool, t.id).catch(() => {});
@@ -1289,7 +1289,7 @@ export async function registerAutomationCrons(pool) {
     // Monday 9AM IST (3:30 UTC) - Weekly Digest
     if (now.getUTCDay() === 1 && now.getUTCHours() === 3 && now.getUTCMinutes() < 16) {
       try {
-        const tenants = await pool.query('SELECT id FROM tenants LIMIT 20');
+        const tenants = await pool.query('SELECT id FROM tenants ORDER BY created_at LIMIT 1000');
         for (const t of tenants.rows) {
           await sendWeeklyDigest(pool, t.id).catch(() => {});
         }
@@ -1300,7 +1300,7 @@ export async function registerAutomationCrons(pool) {
   // Every 30 minutes - Fraud, Credit, Expense Policy
   setInterval(async () => {
     try {
-      const tenants = await pool.query('SELECT id FROM tenants LIMIT 20');
+      const tenants = await pool.query('SELECT id FROM tenants ORDER BY created_at LIMIT 1000');
       for (const t of tenants.rows) {
         await runFraudDetection(pool, t.id).catch(() => {});
         await checkCreditLimits(pool, t.id).catch(() => {});
@@ -1313,7 +1313,7 @@ export async function registerAutomationCrons(pool) {
   // Every 6 hours - TDS, Budget, Cash Flow Prediction, Contracts
   setInterval(async () => {
     try {
-      const tenants = await pool.query('SELECT id FROM tenants LIMIT 20');
+      const tenants = await pool.query('SELECT id FROM tenants ORDER BY created_at LIMIT 1000');
       for (const t of tenants.rows) {
         await trackTDS(pool, t.id).catch(() => {});
         await predictBudgetBurnout(pool, t.id).catch(() => {});
@@ -1326,7 +1326,7 @@ export async function registerAutomationCrons(pool) {
   // Payslip distribution - after payroll (check every hour)
   setInterval(async () => {
     try {
-      const tenants = await pool.query('SELECT id FROM tenants LIMIT 20');
+      const tenants = await pool.query('SELECT id FROM tenants ORDER BY created_at LIMIT 1000');
       for (const t of tenants.rows) {
         await distributePayslips(pool, t.id).catch(() => {});
       }
@@ -1337,7 +1337,7 @@ export async function registerAutomationCrons(pool) {
   // Every 6 hours - additional batch 3 functions
   setInterval(async () => {
     try {
-      const tenants = await pool.query('SELECT id FROM tenants LIMIT 20');
+      const tenants = await pool.query('SELECT id FROM tenants ORDER BY created_at LIMIT 1000');
       for (const t of tenants.rows) {
         await generateRecurringInvoices(pool, t.id).catch(() => {});
         await checkContractRenewals(pool, t.id).catch(() => {});
@@ -1353,7 +1353,7 @@ export async function registerAutomationCrons(pool) {
     const now = new Date();
     if (now.getDate() === 1 && now.getUTCHours() === 4) {
       try {
-        const tenants = await pool.query('SELECT id FROM tenants LIMIT 20');
+        const tenants = await pool.query('SELECT id FROM tenants ORDER BY created_at LIMIT 1000');
         for (const t of tenants.rows) {
           await generateRevenueForecast(pool, t.id).catch(() => {});
           await analyzeBudgetReallocation(pool, t.id).catch(() => {});

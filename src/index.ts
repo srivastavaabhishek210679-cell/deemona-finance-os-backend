@@ -114,9 +114,19 @@ app.use('/api/', rateLimit({
 }));
 
 // ── Health check ──────────────────────────────────────────────
-app.get('/health', (_req, res) => {
-  res.json({ status: 'ok', app: 'Deemona AI Finance OS', timestamp: new Date().toISOString() });
+/*ops-health*/
+app.get('/health', async (_req, res) => {
+  const t0 = Date.now();
+  try {
+    await pool.query('SELECT 1');
+    res.json({ status: 'ok', db: 'ok', db_ms: Date.now() - t0, uptime_s: Math.round(process.uptime()), app: 'Deemona AI Finance OS', timestamp: new Date().toISOString() });
+  } catch (e) {
+    console.error('[health] database check failed', e);
+    res.status(503).json({ status: 'degraded', db: 'down', timestamp: new Date().toISOString() });
+  }
 });
+process.on('unhandledRejection', (r) => console.error('[unhandledRejection]', r));
+process.on('uncaughtException', (e) => console.error('[uncaughtException]', e));
 
 // ── API Routes ────────────────────────────────────────────────
 // Auth
