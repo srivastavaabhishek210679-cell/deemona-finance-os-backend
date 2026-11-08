@@ -1,4 +1,5 @@
 // ============================================================
+/*tenant-iso*/
 // Missing Documents Routes — All 10 document types
 // File: src/routes/missingDocsRoutes.ts
 // ============================================================
@@ -92,14 +93,16 @@ export function createMissingDocsRouter(pool: Pool): Router {
     try {
       const { payment_date, principal_component, interest_component, payment_mode, reference } = req.body;
       const total = parseFloat(principal_component) + parseFloat(interest_component);
+      const own = await pool.query('SELECT 1 FROM loan_agreements WHERE id=$1 AND tenant_id=$2', [req.params.id, tid(req)]);
+      if (!own.rows.length) return res.status(404).json({ error: 'Not found' }) as any;
       const result = await pool.query(
         'INSERT INTO loan_repayments (loan_id, tenant_id, payment_date, principal_component, interest_component, total_payment, payment_mode, reference) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *',
         [req.params.id, tid(req), payment_date, principal_component, interest_component, total, payment_mode, reference]
       );
       // Update outstanding balance
       await pool.query(
-        'UPDATE loan_agreements SET outstanding_balance=outstanding_balance-$1, updated_at=NOW() WHERE id=$2',
-        [principal_component, req.params.id]
+        'UPDATE loan_agreements SET outstanding_balance=outstanding_balance-$1, updated_at=NOW() WHERE id=$2 AND tenant_id=$3',
+        [principal_component, req.params.id, tid(req)]
       );
       res.json({ repayment: result.rows[0] });
     } catch (e) { res.status(500).json({ error: String(e) }); }
@@ -107,7 +110,7 @@ export function createMissingDocsRouter(pool: Pool): Router {
 
   router.get('/loans/:id/repayments', requireAuth, async (req: Request, res: Response) => {
     try {
-      const result = await pool.query('SELECT * FROM loan_repayments WHERE loan_id=$1 ORDER BY payment_date DESC', [req.params.id]);
+      const result = await pool.query('SELECT * FROM loan_repayments WHERE loan_id=$1 AND tenant_id=$2 ORDER BY payment_date DESC', [req.params.id, tid(req)]);
       res.json({ repayments: result.rows });
     } catch (e) { res.status(500).json({ error: String(e) }); }
   });

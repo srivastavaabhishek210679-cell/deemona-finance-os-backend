@@ -1,4 +1,5 @@
 // ============================================================
+/*tenant-iso*/
 // Batch 2 Documents Routes
 // File: src/routes/batch2DocsRoutes.ts
 // ============================================================
@@ -140,13 +141,15 @@ export function createBatch2DocsRouter(pool: Pool): Router {
   router.post('/employee-loans/:id/recover', requireAuth, async (req: Request, res: Response) => {
     try {
       const { recovery_date, principal_recovered, payslip_month } = req.body;
+      const own = await pool.query('SELECT 1 FROM employee_loans WHERE id=$1 AND tenant_id=$2', [req.params.id, tid(req)]);
+      if (!own.rows.length) return res.status(404).json({ error: 'Not found' }) as any;
       await pool.query(
         'INSERT INTO employee_loan_recoveries (loan_id, tenant_id, recovery_date, principal_recovered, total_recovered, payslip_month) VALUES ($1,$2,$3,$4,$5,$6)',
         [req.params.id, tid(req), recovery_date, principal_recovered, principal_recovered, payslip_month]
       );
       await pool.query(
-        'UPDATE employee_loans SET outstanding_balance=outstanding_balance-$1, total_recovered=total_recovered+$1, updated_at=NOW() WHERE id=$2',
-        [principal_recovered, req.params.id]
+        'UPDATE employee_loans SET outstanding_balance=outstanding_balance-$1, total_recovered=total_recovered+$1, updated_at=NOW() WHERE id=$2 AND tenant_id=$3',
+        [principal_recovered, req.params.id, tid(req)]
       );
       res.json({ success: true });
     } catch (e) { res.status(500).json({ error: String(e) }); }

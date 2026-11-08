@@ -1,4 +1,5 @@
 ﻿import { Router, Request, Response } from 'express';
+/*tenant-iso*/
 import { Pool } from 'pg';
 import { requireAuth } from '../middleware/auth';
 import Anthropic from '@anthropic-ai/sdk';
@@ -29,6 +30,8 @@ export function createBudgetingRouter(pool: Pool): Router {
 
   router.get('/budgets/:id/lines', requireAuth, async (req: Request, res: Response) => {
     try {
+      const own = await pool.query('SELECT 1 FROM budgets WHERE id=$1 AND tenant_id=$2', [req.params.id, tid(req)]);
+      if (!own.rows.length) return res.status(404).json({ error: 'Not found' }) as any;
       const result = await pool.query('SELECT bl.*, a.name as account_name FROM budget_lines bl LEFT JOIN accounts a ON a.id = bl.account_id WHERE bl.budget_id = $1', [req.params.id]);
       res.json({ lines: result.rows });
     } catch (err) { res.status(500).json({ error: String(err) }); }

@@ -1,4 +1,5 @@
 import { handleNewLeadNurture } from '../services/automationEngine';
+/*tenant-iso*/
 import { Router, Request, Response } from 'express';
 import { Pool } from 'pg';
 import { requireAuth } from '../middleware/auth';
@@ -62,6 +63,8 @@ export function createCRMRouter(pool: Pool): Router {
 
   router.get('/leads/:id/activities', requireAuth, async (req: Request, res: Response) => {
     try {
+      const own = await pool.query('SELECT 1 FROM crm_leads WHERE id=$1 AND tenant_id=$2', [req.params.id, tid(req)]);
+      if (!own.rows.length) return res.status(404).json({ error: 'Not found' }) as any;
       const result = await pool.query(
         `SELECT * FROM crm_activities WHERE lead_id=$1 ORDER BY date DESC`,
         [req.params.id]
@@ -73,6 +76,8 @@ export function createCRMRouter(pool: Pool): Router {
   router.post('/leads/:id/activities', requireAuth, async (req: Request, res: Response) => {
     try {
       const { type, date, notes, next_action } = req.body;
+      const own = await pool.query('SELECT 1 FROM crm_leads WHERE id=$1 AND tenant_id=$2', [req.params.id, tid(req)]);
+      if (!own.rows.length) return res.status(404).json({ error: 'Not found' }) as any;
       const result = await pool.query(
         `INSERT INTO crm_activities (lead_id, type, date, notes, next_action)
          VALUES ($1,$2,$3,$4,$5) RETURNING *`,

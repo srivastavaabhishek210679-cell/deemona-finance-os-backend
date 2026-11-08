@@ -1,4 +1,5 @@
 ﻿import { Router, Request, Response } from 'express';
+/*tenant-iso*/
 import { Pool } from 'pg';
 import { requireAuth } from '../middleware/auth';
 import {
@@ -14,7 +15,7 @@ import {
 
 export function createAutomationTestRouter(pool: Pool): Router {
   const router = Router();
-  const tid = (req: Request): string => (req as any).user?.tenantId || 'af1845e2-39f3-4e9d-b1ed-91c2798a0f6f';
+  const tid = (req: Request): string => (req as any).user.tenantId;
 
   router.get('/logs', requireAuth, async (req: Request, res: Response) => {
     try {
@@ -26,9 +27,9 @@ export function createAutomationTestRouter(pool: Pool): Router {
     } catch { res.json({ logs: [] }); }
   });
 
-  router.get('/stats', requireAuth, async (_req: Request, res: Response) => {
+  router.get('/stats', requireAuth, async (req: Request, res: Response) => {
     try {
-      const result = await pool.query('SELECT automation_type, status, COUNT(*) as count FROM automation_logs GROUP BY automation_type, status');
+      const result = await pool.query('SELECT automation_type, status, COUNT(*) as count FROM automation_logs WHERE tenant_id=$1 GROUP BY automation_type, status', [tid(req)]);
       res.json({ stats: result.rows });
     } catch { res.json({ stats: [] }); }
   });
@@ -47,7 +48,7 @@ export function createAutomationTestRouter(pool: Pool): Router {
       );
       const invoice = result.rows[0];
       await handleInvoiceAutoApproval(pool, tenantId, invoice.id);
-      const check = await pool.query('SELECT status FROM ap_invoices WHERE id=$1', [invoice.id]);
+      const check = await pool.query('SELECT status FROM ap_invoices WHERE id=$1 AND tenant_id=$2', [invoice.id, tenantId]);
       res.json({
         message: 'Invoice ' + invoice.invoice_number + ' processed - status: ' + check.rows[0].status,
         detail: 'Invoice: ' + invoice.invoice_number + ' | Amount: Rs 25,000',
@@ -66,7 +67,7 @@ export function createAutomationTestRouter(pool: Pool): Router {
       );
       const claim = result.rows[0];
       await handleExpenseAutoApproval(pool, tenantId, claim.id);
-      const check = await pool.query('SELECT status FROM expense_claims WHERE id=$1', [claim.id]);
+      const check = await pool.query('SELECT status FROM expense_claims WHERE id=$1 AND tenant_id=$2', [claim.id, tenantId]);
       res.json({
         message: 'Expense ' + claim.claim_number + ' processed - status: ' + check.rows[0].status,
         detail: 'Claim: ' + claim.claim_number + ' | Amount: Rs 8,500',
@@ -78,7 +79,7 @@ export function createAutomationTestRouter(pool: Pool): Router {
   router.post('/test/low-cash', requireAuth, async (req: Request, res: Response) => {
     try {
       const tenantId = tid(req);
-      await pool.query("DELETE FROM automation_logs WHERE automation_type='LOW_CASH_ALERT' AND created_at > NOW()-INTERVAL '24 hours'");
+      await pool.query("DELETE FROM automation_logs WHERE automation_type='LOW_CASH_ALERT' AND tenant_id=$1 AND created_at > NOW()-INTERVAL '24 hours'", [tid(req)]);
       const result = await pool.query('SELECT COALESCE(SUM(total_amount),0) as total FROM expense_claims WHERE tenant_id=$1', [tenantId]);
       const cash = parseFloat(result.rows[0].total || 0);
       await checkLowCashAlert(pool, tenantId);
@@ -93,7 +94,7 @@ export function createAutomationTestRouter(pool: Pool): Router {
         "INSERT INTO compliance_items (tenant_id, title, due_date, status, category) VALUES ($1,'TEST: GSTR-3B Filing',NOW()+INTERVAL '5 days','Pending','GST') ON CONFLICT DO NOTHING",
         [tenantId]
       );
-      await pool.query("DELETE FROM automation_logs WHERE automation_type='COMPLIANCE_ALERT' AND created_at > NOW()-INTERVAL '24 hours'");
+      await pool.query("DELETE FROM automation_logs WHERE automation_type='COMPLIANCE_ALERT' AND tenant_id=$1 AND created_at > NOW()-INTERVAL '24 hours'", [tid(req)]);
       await checkComplianceAlerts(pool, tenantId);
       res.json({ message: 'Compliance alert test triggered', detail: 'Created test item due in 5 days and sent reminder', success: true });
     } catch (e) { res.json({ error: String(e) }); }
@@ -127,7 +128,7 @@ export function createAutomationTestRouter(pool: Pool): Router {
   router.post('/test/vendor-payment', requireAuth, async (req: Request, res: Response) => {
     try {
       const tenantId = tid(req);
-      await pool.query("DELETE FROM automation_logs WHERE automation_type='PAYMENT_SCHEDULED' AND created_at > NOW()-INTERVAL '24 hours'");
+      await pool.query("DELETE FROM automation_logs WHERE automation_type='PAYMENT_SCHEDULED' AND tenant_id=$1 AND created_at > NOW()-INTERVAL '24 hours'", [tid(req)]);
       await checkVendorPaymentSchedule(pool, tenantId);
       const count = await pool.query("SELECT COUNT(*) FROM purchase_orders WHERE tenant_id=$1 AND status IN ('approved','Approved') AND expected_date BETWEEN NOW() AND NOW()+INTERVAL '3 days'", [tenantId]);
       res.json({ message: 'Vendor payment scheduler triggered', detail: 'Found ' + count.rows[0].count + ' orders due in 3 days. Alerts sent.', success: true });
@@ -235,7 +236,7 @@ export function createAutomationTestRouter(pool: Pool): Router {
 
   router.post('/test/statutory-dates', requireAuth, async (req: Request, res: Response) => {
     try {
-      await pool.query("DELETE FROM automation_logs WHERE automation_type='STATUTORY_ALERT' AND created_at > NOW()-INTERVAL '24 hours'");
+      await pool.query("DELETE FROM automation_logs WHERE automation_type='STATUTORY_ALERT' AND tenant_id=$1 AND created_at > NOW()-INTERVAL '24 hours'", [tid(req)]);
       await (await import('../services/automationEngine')).checkStatutoryDueDates(pool, tid(req));
       res.json({ message: 'Statutory dates check complete', success: true });
     } catch (e) { res.json({ error: String(e) }); }

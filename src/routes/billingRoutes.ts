@@ -1,4 +1,5 @@
 import { Router, Request, Response } from 'express';
+/*tenant-iso*/
 import { Pool } from 'pg';
 import { requireAuth } from '../middleware/auth';
 
@@ -68,21 +69,28 @@ export function createBillingRouter(pool: Pool): Router {
   // ── POST /api/billing/verify-payment ───────────────────────
   router.post('/verify-payment', requireAuth, async (req: Request, res: Response) => {
     try {
-      const { razorpay_order_id, razorpay_payment_id, razorpay_signature, plan } = req.body;
+      const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body;
       const crypto = require('crypto');
-      const expectedSig = crypto.createHmac('sha256', RAZORPAY_KEY_SECRET || '')
+      if (!RAZORPAY_KEY_SECRET) return res.status(503).json({ error: 'Payments are not configured' }) as any;
+      const expectedSig = crypto.createHmac('sha256', RAZORPAY_KEY_SECRET)
         .update(`${razorpay_order_id}|${razorpay_payment_id}`).digest('hex');
-
-      if (expectedSig !== razorpay_signature && RAZORPAY_KEY_SECRET) {
+      const a = Buffer.from(expectedSig), b = Buffer.from(String(razorpay_signature || ''));
+      if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
         return res.status(400).json({ error: 'Invalid payment signature' }) as any;
       }
+      // The order must belong to this tenant and not be already used; the plan comes from the order, not the request.
+      const ord = await pool.query(
+        "SELECT plan, status FROM billing_orders WHERE razorpay_order_id=$1 AND tenant_id=$2", [razorpay_order_id, tid(req)]);
+      if (!ord.rows.length) return res.status(404).json({ error: 'Order not found' }) as any;
+      if (String(ord.rows[0].status).toLowerCase() === 'paid') return res.status(409).json({ error: 'Order already processed' }) as any;
+      const plan = ord.rows[0].plan;
 
       const nextBilling = new Date();
       nextBilling.setMonth(nextBilling.getMonth() + 1);
 
       await pool.query(
-        `UPDATE billing_orders SET status='paid', payment_id=$1, updated_at=NOW() WHERE razorpay_order_id=$2`,
-        [razorpay_payment_id, razorpay_order_id]
+        `UPDATE billing_orders SET status='paid', payment_id=$1, updated_at=NOW() WHERE razorpay_order_id=$2 AND tenant_id=$3`,
+        [razorpay_payment_id, razorpay_order_id, tid(req)]
       ).catch(() => {});
 
       await pool.query(
