@@ -2,6 +2,12 @@
 // Actions: customer payment reminders (email / WhatsApp), board report, compliance task. Idempotent. Run from the backend folder.
 // Needs: apply-smtp-backend, apply-decision-tools-backend and apply-collection-risk-backend applied first.
 const fs = require('fs');
+const EMP_BLOCK = String.raw`      const emp = await pool.query("SELECT LOWER(email) AS email FROM employees WHERE tenant_id=$1 AND status='active' AND RIGHT(regexp_replace(COALESCE(phone,''),'\\D','','g'),10)=$2 ORDER BY (email IS NOT NULL AND email <> '') DESC LIMIT 1", [t, digits]);
+      if (!emp.rows.length) return 'Your number is not saved on an active employee record in your company.';
+      if (!emp.rows[0].email) return 'Your employee record has no email. Add the email you use to log in to Deemona Finance OS, then send ACTIONS again.';
+      const usr = await pool.query("SELECT id::text AS id, email, role, first_name FROM users WHERE tenant_id=$1 AND LOWER(email)=$2 AND role IN ('admin','owner') LIMIT 1", [t, emp.rows[0].email]);
+      if (!usr.rows.length) { const em = String(emp.rows[0].email); const masked = em.slice(0, 3) + '***' + em.slice(em.indexOf('@')); return 'Your employee record has the email ' + masked + ', but no admin or owner login in your company uses that email. Change the employee email to your admin login email.'; }
+`;
 
 const SVC = String.raw`// Controlled autonomy: propose -> admin approves -> execute -> audit. Nothing runs without an approval.
 import { Pool } from 'pg';
@@ -33,6 +39,7 @@ export async function ensureActionTables(pool: Pool): Promise<void> {
   await pool.query('CREATE TABLE IF NOT EXISTS cfo_action_audit (' +
     'id UUID PRIMARY KEY DEFAULT gen_random_uuid(), tenant_id UUID NOT NULL, action_id UUID, event TEXT NOT NULL, actor TEXT, detail JSONB, at TIMESTAMPTZ DEFAULT NOW())');
   await pool.query('CREATE INDEX IF NOT EXISTS idx_caa_tenant_at ON cfo_action_audit (tenant_id, at DESC)');
+  await pool.query('CREATE TABLE IF NOT EXISTS cfo_approver_phones (user_id TEXT PRIMARY KEY, tenant_id UUID NOT NULL, phone10 TEXT NOT NULL UNIQUE, email TEXT, created_at TIMESTAMPTZ DEFAULT NOW())');
   ready = true;
 }
 
@@ -282,6 +289,54 @@ export async function rejectAction(pool: Pool, tenantId: string, id: string, act
   return { ok: true, status: 200, action: { ...r.rows[0], code: actionCode(id) } };
 }
 
+// ── Customer contacts (so reminders have somewhere to go) ──────
+export async function listContacts(pool: Pool, tenantId: string) {
+  const r = await pool.query("SELECT c.id::text AS id, c.name, c.email, c.phone, COALESCE(SUM(i.balance_due) FILTER (WHERE i.status NOT IN ('paid','cancelled','draft')),0)::float8 AS open_balance " +
+    "FROM customers c LEFT JOIN ar_invoices i ON i.customer_id = c.id AND i.tenant_id = c.tenant_id WHERE c.tenant_id=$1 GROUP BY c.id, c.name, c.email, c.phone ORDER BY open_balance DESC, c.name LIMIT 300", [tenantId]);
+  return r.rows;
+}
+export async function updateContact(pool: Pool, tenantId: string, id: string, actor: Actor, b: { email?: string; phone?: string }): Promise<{ ok: boolean; status: number; error?: string; contact?: any }> {
+  await ensureActionTables(pool);
+  if (!/^[0-9a-f-]{36}$/i.test(String(id))) return { ok: false, status: 400, error: 'Invalid customer id.' };
+  const email = String(b.email ?? '').trim(), phone = String(b.phone ?? '').trim();
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return { ok: false, status: 400, error: 'That email address does not look right.' };
+  const digits = phone.replace(/\D/g, '');
+  if (phone && (digits.length < 10 || digits.length > 15)) return { ok: false, status: 400, error: 'Enter the phone number with 10 to 15 digits.' };
+  const r = await pool.query('UPDATE customers SET email=$3, phone=$4 WHERE id=$1 AND tenant_id=$2 RETURNING id::text AS id, name, email, phone', [id, tenantId, email || null, phone || null]);
+  if (!r.rows.length) return { ok: false, status: 404, error: 'Customer not found.' };
+  await audit(pool, tenantId, null, 'contact_updated', actor.email, { customer: r.rows[0].name, email_set: !!email, phone_set: !!phone });
+  return { ok: true, status: 200, contact: r.rows[0] };
+}
+
+// ── WhatsApp approver registration: an admin links their own number, no employee record needed ──
+export async function getApproverPhone(pool: Pool, tenantId: string, userId: string): Promise<string | null> {
+  await ensureActionTables(pool);
+  const r = await pool.query('SELECT phone10 FROM cfo_approver_phones WHERE user_id=$1 AND tenant_id=$2', [String(userId), tenantId]);
+  return r.rows[0] ? r.rows[0].phone10 : null;
+}
+export async function setApproverPhone(pool: Pool, tenantId: string, actor: Actor, phone: string): Promise<{ ok: boolean; status: number; error?: string; phone?: string | null }> {
+  await ensureActionTables(pool);
+  const raw = String(phone || '').trim();
+  if (!raw) {
+    await pool.query('DELETE FROM cfo_approver_phones WHERE user_id=$1 AND tenant_id=$2', [String(actor.id), tenantId]);
+    await audit(pool, tenantId, null, 'whatsapp_approver_removed', actor.email, {});
+    return { ok: true, status: 200, phone: null };
+  }
+  const digits = raw.replace(/\D/g, '').slice(-10);
+  if (digits.length < 10) return { ok: false, status: 400, error: 'Enter your 10-digit WhatsApp number.' };
+  const taken = await pool.query('SELECT 1 FROM cfo_approver_phones WHERE phone10=$1 AND user_id <> $2', [digits, String(actor.id)]);
+  if (taken.rows.length) return { ok: false, status: 409, error: 'That number is already registered to another admin.' };
+  await pool.query('DELETE FROM cfo_approver_phones WHERE user_id=$1', [String(actor.id)]);
+  await pool.query('INSERT INTO cfo_approver_phones (user_id, tenant_id, phone10, email) VALUES ($1,$2,$3,$4)', [String(actor.id), tenantId, digits, actor.email]);
+  await audit(pool, tenantId, null, 'whatsapp_approver_set', actor.email, { phone_ending: digits.slice(-4) });
+  return { ok: true, status: 200, phone: digits };
+}
+export async function findApprover(pool: Pool, phone10: string): Promise<{ tenant_id: string; id: string; email: string; name: string; role: string } | null> {
+  await ensureActionTables(pool);
+  const r = await pool.query("SELECT p.tenant_id::text AS tenant_id, u.id::text AS id, u.email, u.first_name AS name, u.role FROM cfo_approver_phones p JOIN users u ON u.id::text = p.user_id AND u.tenant_id = p.tenant_id WHERE p.phone10=$1 AND u.role IN ('admin','owner') LIMIT 1", [phone10]);
+  return r.rows[0] || null;
+}
+
 // Optional daily job: propose actions on its own and email the admins. Off unless ACTIONS_AUTOPROPOSE=1.
 export function startActionProposalJob(pool: Pool): void {
   if (process.env.ACTIONS_AUTOPROPOSE !== '1') return;
@@ -310,7 +365,7 @@ import { Pool } from 'pg';
 import { requireAuth } from '../middleware/auth';
 import { requireRole } from '../middleware/rbac';
 import { runMetric } from '../services/cfoMetrics';
-import { listActions, listAudit, approveAction, rejectAction, proposeCollectionActions, proposeBoardReport, proposeComplianceTasks } from '../services/controlledActions';
+import { listActions, listAudit, approveAction, rejectAction, proposeCollectionActions, proposeBoardReport, proposeComplianceTasks, listContacts, updateContact, getApproverPhone, setApproverPhone } from '../services/controlledActions';
 
 export function createActionsRouter(pool: Pool): Router {
   const router = Router();
@@ -321,6 +376,16 @@ export function createActionsRouter(pool: Pool): Router {
 
   router.get('/', requireAuth, admin, wrap(async (req, res) => { res.json({ actions: await listActions(pool, t(req), String(req.query.scope || 'open'), parseInt(String(req.query.limit || '50'), 10)) }); }));
   router.get('/audit', requireAuth, admin, wrap(async (req, res) => { res.json({ audit: await listAudit(pool, t(req), parseInt(String(req.query.limit || '100'), 10)) }); }));
+  router.get('/my-whatsapp', requireAuth, admin, wrap(async (req, res) => { res.json({ phone: await getApproverPhone(pool, t(req), actor(req).id) }); }));
+  router.put('/my-whatsapp', requireAuth, admin, wrap(async (req, res) => {
+    const r = await setApproverPhone(pool, t(req), actor(req), typeof req.body?.phone === 'string' ? req.body.phone : '');
+    res.status(r.status).json(r.ok ? { phone: r.phone } : { error: r.error });
+  }));
+  router.get('/contacts', requireAuth, admin, wrap(async (req, res) => { res.json({ customers: await listContacts(pool, t(req)) }); }));
+  router.put('/contacts/:id', requireAuth, admin, wrap(async (req, res) => {
+    const r = await updateContact(pool, t(req), String(req.params.id), actor(req), { email: req.body?.email, phone: req.body?.phone });
+    res.status(r.status).json(r.ok ? { contact: r.contact } : { error: r.error });
+  }));
   router.post('/propose/reminders', requireAuth, admin, wrap(async (req, res) => {
     const b = req.body || {};
     res.json(await proposeCollectionActions(pool, t(req), { channels: Array.isArray(b.channels) ? b.channels : undefined, min_days_overdue: b.min_days_overdue, limit: b.limit }, actor(req).email));
@@ -435,9 +500,11 @@ patch('src/services/whatsappCommands.ts', s => {
   return s.replace(branch, branch + String.raw`
 
     if (cmd === 'ACTIONS' || cmd === 'OK' || cmd === 'NO') {
-      const emp = await pool.query("SELECT LOWER(email) AS email FROM employees WHERE tenant_id=$1 AND status='active' AND email IS NOT NULL AND RIGHT(regexp_replace(COALESCE(phone,''),'\\D','','g'),10)=$2 LIMIT 1", [t, digits]);
-      const usr = emp.rows.length ? await pool.query("SELECT id::text AS id, email, role, first_name FROM users WHERE tenant_id=$1 AND LOWER(email)=$2 AND role IN ('admin','owner') LIMIT 1", [t, emp.rows[0].email]) : { rows: [] as any[] };
-      if (!usr.rows.length) return 'Only company admins can see or approve actions. Your WhatsApp number must be saved on your employee record with the same email as your admin login.';
+      const emp = await pool.query("SELECT LOWER(email) AS email FROM employees WHERE tenant_id=$1 AND status='active' AND RIGHT(regexp_replace(COALESCE(phone,''),'\\D','','g'),10)=$2 ORDER BY (email IS NOT NULL AND email <> '') DESC LIMIT 1", [t, digits]);
+      if (!emp.rows.length) return 'Your number is not saved on an active employee record in your company.';
+      if (!emp.rows[0].email) return 'Your employee record has no email. Add the email you use to log in to Deemona Finance OS, then send ACTIONS again.';
+      const usr = await pool.query("SELECT id::text AS id, email, role, first_name FROM users WHERE tenant_id=$1 AND LOWER(email)=$2 AND role IN ('admin','owner') LIMIT 1", [t, emp.rows[0].email]);
+      if (!usr.rows.length) { const em = String(emp.rows[0].email); const masked = em.slice(0, 3) + '***' + em.slice(em.indexOf('@')); return 'Your employee record has the email ' + masked + ', but no admin or owner login in your company uses that email. Change the employee email to your admin login email.'; }
       const who2 = { id: usr.rows[0].id, email: usr.rows[0].email, name: usr.rows[0].first_name, role: usr.rows[0].role };
       if (cmd === 'ACTIONS') {
         const list = await listActions(pool, t, 'open', 5);
@@ -455,4 +522,48 @@ patch('src/services/whatsappCommands.ts', s => {
   if (s.includes("from './controlledActions'")) return s;
   need(s, "export async function handleWhatsAppCommand", 'whatsappCommands.ts');
   return "import { listActions, findByCode, approveAction, rejectAction } from './controlledActions';\nimport { runMetric } from './cfoMetrics';\n" + s;
+});
+
+patch('src/services/whatsappCommands.ts', s => {
+  if (s.includes('has no email. Add the email')) return s;
+  const re = /      const emp = await pool\.query\("SELECT LOWER\(email\)[\s\S]*?Only company admins can see or approve actions\.[^\n]*\n/;
+  if (!re.test(s)) return s;
+  return s.replace(re, () => EMP_BLOCK);
+});
+
+// WhatsApp: registered approvers can use ACTIONS / OK / NO without an employee record
+patch('src/services/whatsappCommands.ts', s => {
+  if (s.includes('findApprover')) return s;
+  const imp = "import { listActions, findByCode, approveAction, rejectAction } from './controlledActions';";
+  const cutLine = "const cut = (s: string): string => (s.length > 1500 ? s.slice(0, 1480) + '\\n...(more in the app)' : s);";
+  const whoLine = "    const who = await pool.query(";
+  need(s, imp, 'whatsappCommands.ts'); need(s, cutLine, 'whatsappCommands.ts'); need(s, whoLine, 'whatsappCommands.ts');
+  s = s.replace(imp, "import { listActions, findByCode, approveAction, rejectAction, findApprover } from './controlledActions';");
+  s = s.replace(cutLine, cutLine + `
+
+async function actionReply(pool: any, t: string, cmd: string, arg: string, who2: any): Promise<string> {
+  if (cmd === 'ACTIONS') {
+    const list = await listActions(pool, t, 'open', 5);
+    if (!list.length) return 'No actions are waiting for your approval.';
+    return cut(['Waiting for your approval:'].concat(list.map((x: any) => '\\n' + x.code + ' - ' + x.title + '\\n' + (x.summary || ''))).concat(['\\nReply OK <code> to approve or NO <code> to reject.']).join('\\n'));
+  }
+  const found = await findByCode(pool, t, arg);
+  if (!found.id) return found.error || 'Not found.';
+  if (cmd === 'NO') { const r = await rejectAction(pool, t, found.id, who2); return r.ok ? 'Rejected. Nothing was sent.' : (r.error || 'Could not reject.'); }
+  const r = await approveAction(pool, t, found.id, who2, { runMetric });
+  return r.ok ? 'Approved and done: ' + (r.action && r.action.title ? r.action.title : 'action') + '.' : (r.error || 'Could not approve.');
+}`);
+  s = s.replace(whoLine, `    if (cmd === 'ACTIONS' || cmd === 'OK' || cmd === 'NO') {
+      const ap = await findApprover(pool, digits);
+      if (ap) return await actionReply(pool, ap.tenant_id, cmd, arg, { id: ap.id, email: ap.email, name: ap.name, role: ap.role });
+    }
+` + whoLine);
+  return s;
+});
+patch('src/services/whatsappCommands.ts', s => {
+  if (s.includes('My WhatsApp approval number')) return s;
+  const hint = ' You can also register this number in the app: Actions, My WhatsApp approval number.';
+  const a = "then send ACTIONS again.'", b = "Change the employee email to your admin login email.'", c = "Your number is not saved on an active employee record in your company.'";
+  let n = 0; for (const x of [a, b, c]) if (s.includes(x)) { s = s.replace(x, x.slice(0, -1) + hint + "'"); n++; }
+  return s;
 });

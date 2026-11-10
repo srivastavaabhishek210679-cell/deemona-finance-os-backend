@@ -28,6 +28,7 @@ export async function ensureActionTables(pool: Pool): Promise<void> {
   await pool.query('CREATE TABLE IF NOT EXISTS cfo_action_audit (' +
     'id UUID PRIMARY KEY DEFAULT gen_random_uuid(), tenant_id UUID NOT NULL, action_id UUID, event TEXT NOT NULL, actor TEXT, detail JSONB, at TIMESTAMPTZ DEFAULT NOW())');
   await pool.query('CREATE INDEX IF NOT EXISTS idx_caa_tenant_at ON cfo_action_audit (tenant_id, at DESC)');
+  await pool.query('CREATE TABLE IF NOT EXISTS cfo_approver_phones (user_id TEXT PRIMARY KEY, tenant_id UUID NOT NULL, phone10 TEXT NOT NULL UNIQUE, email TEXT, created_at TIMESTAMPTZ DEFAULT NOW())');
   ready = true;
 }
 
@@ -275,6 +276,54 @@ export async function rejectAction(pool: Pool, tenantId: string, id: string, act
   if (!r.rows.length) return { ok: false, status: 409, error: 'This action is not waiting for approval.' };
   await audit(pool, tenantId, id, 'rejected', actor.email, { reason: reason ? String(reason).slice(0, 300) : undefined });
   return { ok: true, status: 200, action: { ...r.rows[0], code: actionCode(id) } };
+}
+
+// ── Customer contacts (so reminders have somewhere to go) ──────
+export async function listContacts(pool: Pool, tenantId: string) {
+  const r = await pool.query("SELECT c.id::text AS id, c.name, c.email, c.phone, COALESCE(SUM(i.balance_due) FILTER (WHERE i.status NOT IN ('paid','cancelled','draft')),0)::float8 AS open_balance " +
+    "FROM customers c LEFT JOIN ar_invoices i ON i.customer_id = c.id AND i.tenant_id = c.tenant_id WHERE c.tenant_id=$1 GROUP BY c.id, c.name, c.email, c.phone ORDER BY open_balance DESC, c.name LIMIT 300", [tenantId]);
+  return r.rows;
+}
+export async function updateContact(pool: Pool, tenantId: string, id: string, actor: Actor, b: { email?: string; phone?: string }): Promise<{ ok: boolean; status: number; error?: string; contact?: any }> {
+  await ensureActionTables(pool);
+  if (!/^[0-9a-f-]{36}$/i.test(String(id))) return { ok: false, status: 400, error: 'Invalid customer id.' };
+  const email = String(b.email ?? '').trim(), phone = String(b.phone ?? '').trim();
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return { ok: false, status: 400, error: 'That email address does not look right.' };
+  const digits = phone.replace(/\D/g, '');
+  if (phone && (digits.length < 10 || digits.length > 15)) return { ok: false, status: 400, error: 'Enter the phone number with 10 to 15 digits.' };
+  const r = await pool.query('UPDATE customers SET email=$3, phone=$4 WHERE id=$1 AND tenant_id=$2 RETURNING id::text AS id, name, email, phone', [id, tenantId, email || null, phone || null]);
+  if (!r.rows.length) return { ok: false, status: 404, error: 'Customer not found.' };
+  await audit(pool, tenantId, null, 'contact_updated', actor.email, { customer: r.rows[0].name, email_set: !!email, phone_set: !!phone });
+  return { ok: true, status: 200, contact: r.rows[0] };
+}
+
+// ── WhatsApp approver registration: an admin links their own number, no employee record needed ──
+export async function getApproverPhone(pool: Pool, tenantId: string, userId: string): Promise<string | null> {
+  await ensureActionTables(pool);
+  const r = await pool.query('SELECT phone10 FROM cfo_approver_phones WHERE user_id=$1 AND tenant_id=$2', [String(userId), tenantId]);
+  return r.rows[0] ? r.rows[0].phone10 : null;
+}
+export async function setApproverPhone(pool: Pool, tenantId: string, actor: Actor, phone: string): Promise<{ ok: boolean; status: number; error?: string; phone?: string | null }> {
+  await ensureActionTables(pool);
+  const raw = String(phone || '').trim();
+  if (!raw) {
+    await pool.query('DELETE FROM cfo_approver_phones WHERE user_id=$1 AND tenant_id=$2', [String(actor.id), tenantId]);
+    await audit(pool, tenantId, null, 'whatsapp_approver_removed', actor.email, {});
+    return { ok: true, status: 200, phone: null };
+  }
+  const digits = raw.replace(/\D/g, '').slice(-10);
+  if (digits.length < 10) return { ok: false, status: 400, error: 'Enter your 10-digit WhatsApp number.' };
+  const taken = await pool.query('SELECT 1 FROM cfo_approver_phones WHERE phone10=$1 AND user_id <> $2', [digits, String(actor.id)]);
+  if (taken.rows.length) return { ok: false, status: 409, error: 'That number is already registered to another admin.' };
+  await pool.query('DELETE FROM cfo_approver_phones WHERE user_id=$1', [String(actor.id)]);
+  await pool.query('INSERT INTO cfo_approver_phones (user_id, tenant_id, phone10, email) VALUES ($1,$2,$3,$4)', [String(actor.id), tenantId, digits, actor.email]);
+  await audit(pool, tenantId, null, 'whatsapp_approver_set', actor.email, { phone_ending: digits.slice(-4) });
+  return { ok: true, status: 200, phone: digits };
+}
+export async function findApprover(pool: Pool, phone10: string): Promise<{ tenant_id: string; id: string; email: string; name: string; role: string } | null> {
+  await ensureActionTables(pool);
+  const r = await pool.query("SELECT p.tenant_id::text AS tenant_id, u.id::text AS id, u.email, u.first_name AS name, u.role FROM cfo_approver_phones p JOIN users u ON u.id::text = p.user_id AND u.tenant_id = p.tenant_id WHERE p.phone10=$1 AND u.role IN ('admin','owner') LIMIT 1", [phone10]);
+  return r.rows[0] || null;
 }
 
 // Optional daily job: propose actions on its own and email the admins. Off unless ACTIONS_AUTOPROPOSE=1.

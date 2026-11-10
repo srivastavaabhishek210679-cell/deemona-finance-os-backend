@@ -1,9 +1,22 @@
-import { listActions, findByCode, approveAction, rejectAction } from './controlledActions';
+import { listActions, findByCode, approveAction, rejectAction, findApprover } from './controlledActions';
 import { runMetric } from './cfoMetrics';
 // WhatsApp commands for finance data. Returns a reply, or null when the message is not a command.
 const inr = (n: any): string => 'Rs ' + Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 });
 const day = (d: any): string => { try { return new Date(d).toISOString().slice(0, 10); } catch { return String(d || ''); } };
 const cut = (s: string): string => (s.length > 1500 ? s.slice(0, 1480) + '\n...(more in the app)' : s);
+
+async function actionReply(pool: any, t: string, cmd: string, arg: string, who2: any): Promise<string> {
+  if (cmd === 'ACTIONS') {
+    const list = await listActions(pool, t, 'open', 5);
+    if (!list.length) return 'No actions are waiting for your approval.';
+    return cut(['Waiting for your approval:'].concat(list.map((x: any) => '\n' + x.code + ' - ' + x.title + '\n' + (x.summary || ''))).concat(['\nReply OK <code> to approve or NO <code> to reject.']).join('\n'));
+  }
+  const found = await findByCode(pool, t, arg);
+  if (!found.id) return found.error || 'Not found.';
+  if (cmd === 'NO') { const r = await rejectAction(pool, t, found.id, who2); return r.ok ? 'Rejected. Nothing was sent.' : (r.error || 'Could not reject.'); }
+  const r = await approveAction(pool, t, found.id, who2, { runMetric });
+  return r.ok ? 'Approved and done: ' + (r.action && r.action.title ? r.action.title : 'action') + '.' : (r.error || 'Could not approve.');
+}
 
 const HELP = [
   'Deemona Finance commands:',
@@ -26,6 +39,10 @@ export async function handleWhatsAppCommand(pool: any, from: string, body: strin
   try {
     const digits = String(from || '').replace(/\D/g, '').slice(-10);
     if (digits.length < 10) return 'Sender not recognised.';
+    if (cmd === 'ACTIONS' || cmd === 'OK' || cmd === 'NO') {
+      const ap = await findApprover(pool, digits);
+      if (ap) return await actionReply(pool, ap.tenant_id, cmd, arg, { id: ap.id, email: ap.email, name: ap.name, role: ap.role });
+    }
     const who = await pool.query(
       "SELECT DISTINCT tenant_id FROM employees WHERE status='active' AND RIGHT(regexp_replace(COALESCE(phone,''),'\\D','','g'),10)=$1", [digits]);
     if (who.rows.length !== 1) return 'Sender not recognised.';
@@ -33,9 +50,11 @@ export async function handleWhatsAppCommand(pool: any, from: string, body: strin
     if (cmd === 'HELP' || cmd === 'MENU') return HELP;
 
     if (cmd === 'ACTIONS' || cmd === 'OK' || cmd === 'NO') {
-      const emp = await pool.query("SELECT LOWER(email) AS email FROM employees WHERE tenant_id=$1 AND status='active' AND email IS NOT NULL AND RIGHT(regexp_replace(COALESCE(phone,''),'\\D','','g'),10)=$2 LIMIT 1", [t, digits]);
-      const usr = emp.rows.length ? await pool.query("SELECT id::text AS id, email, role, first_name FROM users WHERE tenant_id=$1 AND LOWER(email)=$2 AND role IN ('admin','owner') LIMIT 1", [t, emp.rows[0].email]) : { rows: [] as any[] };
-      if (!usr.rows.length) return 'Only company admins can see or approve actions. Your WhatsApp number must be saved on your employee record with the same email as your admin login.';
+      const emp = await pool.query("SELECT LOWER(email) AS email FROM employees WHERE tenant_id=$1 AND status='active' AND RIGHT(regexp_replace(COALESCE(phone,''),'\\D','','g'),10)=$2 ORDER BY (email IS NOT NULL AND email <> '') DESC LIMIT 1", [t, digits]);
+      if (!emp.rows.length) return 'Your number is not saved on an active employee record in your company. You can also register this number in the app: Actions, My WhatsApp approval number.';
+      if (!emp.rows[0].email) return 'Your employee record has no email. Add the email you use to log in to Deemona Finance OS, then send ACTIONS again. You can also register this number in the app: Actions, My WhatsApp approval number.';
+      const usr = await pool.query("SELECT id::text AS id, email, role, first_name FROM users WHERE tenant_id=$1 AND LOWER(email)=$2 AND role IN ('admin','owner') LIMIT 1", [t, emp.rows[0].email]);
+      if (!usr.rows.length) { const em = String(emp.rows[0].email); const masked = em.slice(0, 3) + '***' + em.slice(em.indexOf('@')); return 'Your employee record has the email ' + masked + ', but no admin or owner login in your company uses that email. Change the employee email to your admin login email. You can also register this number in the app: Actions, My WhatsApp approval number.'; }
       const who2 = { id: usr.rows[0].id, email: usr.rows[0].email, name: usr.rows[0].first_name, role: usr.rows[0].role };
       if (cmd === 'ACTIONS') {
         const list = await listActions(pool, t, 'open', 5);

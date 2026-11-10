@@ -4,7 +4,7 @@ import { Pool } from 'pg';
 import { requireAuth } from '../middleware/auth';
 import { requireRole } from '../middleware/rbac';
 import { runMetric } from '../services/cfoMetrics';
-import { listActions, listAudit, approveAction, rejectAction, proposeCollectionActions, proposeBoardReport, proposeComplianceTasks } from '../services/controlledActions';
+import { listActions, listAudit, approveAction, rejectAction, proposeCollectionActions, proposeBoardReport, proposeComplianceTasks, listContacts, updateContact, getApproverPhone, setApproverPhone } from '../services/controlledActions';
 
 export function createActionsRouter(pool: Pool): Router {
   const router = Router();
@@ -15,6 +15,16 @@ export function createActionsRouter(pool: Pool): Router {
 
   router.get('/', requireAuth, admin, wrap(async (req, res) => { res.json({ actions: await listActions(pool, t(req), String(req.query.scope || 'open'), parseInt(String(req.query.limit || '50'), 10)) }); }));
   router.get('/audit', requireAuth, admin, wrap(async (req, res) => { res.json({ audit: await listAudit(pool, t(req), parseInt(String(req.query.limit || '100'), 10)) }); }));
+  router.get('/my-whatsapp', requireAuth, admin, wrap(async (req, res) => { res.json({ phone: await getApproverPhone(pool, t(req), actor(req).id) }); }));
+  router.put('/my-whatsapp', requireAuth, admin, wrap(async (req, res) => {
+    const r = await setApproverPhone(pool, t(req), actor(req), typeof req.body?.phone === 'string' ? req.body.phone : '');
+    res.status(r.status).json(r.ok ? { phone: r.phone } : { error: r.error });
+  }));
+  router.get('/contacts', requireAuth, admin, wrap(async (req, res) => { res.json({ customers: await listContacts(pool, t(req)) }); }));
+  router.put('/contacts/:id', requireAuth, admin, wrap(async (req, res) => {
+    const r = await updateContact(pool, t(req), String(req.params.id), actor(req), { email: req.body?.email, phone: req.body?.phone });
+    res.status(r.status).json(r.ok ? { contact: r.contact } : { error: r.error });
+  }));
   router.post('/propose/reminders', requireAuth, admin, wrap(async (req, res) => {
     const b = req.body || {};
     res.json(await proposeCollectionActions(pool, t(req), { channels: Array.isArray(b.channels) ? b.channels : undefined, min_days_overdue: b.min_days_overdue, limit: b.limit }, actor(req).email));
