@@ -1,4 +1,5 @@
-﻿import { Pool } from 'pg';
+﻿import { mailFetch } from './mailer';
+import { Pool } from 'pg';
 import { cashAsOf } from './cashPosition';
 import Anthropic from '@anthropic-ai/sdk';
 
@@ -8,7 +9,7 @@ async function sendEmail(to, subject, html) {
   const key = process.env.RESEND_API_KEY;
   if (!key) return false;
   try {
-    const res = await fetch('https://api.resend.com/emails', {
+    const res = await mailFetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: { 'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -125,7 +126,7 @@ export async function handleWhatsAppApprovalReply(pool, from, body) {
     if (digits.length < 10) return 'Sender not recognised.';
     const who = await pool.query("SELECT DISTINCT tenant_id FROM employees WHERE RIGHT(regexp_replace(COALESCE(phone,''),'\\D','','g'),10)=$1", [digits]);
     if (who.rows.length !== 1) return 'Sender not recognised.';
-    const result = await pool.query("SELECT * FROM ap_invoices WHERE tenant_id=$2 AND id::text LIKE $1 AND status='pending' LIMIT 1", [partialId + '%', who.rows[0].tenant_id]);
+    const result = await pool.query("SELECT * FROM ap_invoices WHERE tenant_id=$2 AND id::text LIKE $1 AND status IN ('pending','pending_approval') LIMIT 1", [partialId + '%', who.rows[0].tenant_id]);
     if (!result.rows.length) return 'Invoice not found or already processed.';
     const invoice = result.rows[0];
     const newStatus = isApprove ? 'approved' : 'rejected';

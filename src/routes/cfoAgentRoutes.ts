@@ -11,7 +11,7 @@ import { requireAuth } from '../middleware/auth';
 import { METRICS, runMetric, recordSnapshot } from '../services/cfoMetrics';
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-const MODEL = 'claude-sonnet-4-6';
+const MODEL = process.env.CFO_MODEL || 'claude-sonnet-4-6';
 const MAX_TOOL_ROUNDS = 6;
 const MAX_RESULT_CHARS = 14000;
 
@@ -25,6 +25,11 @@ const todayIST = (): string =>
 const systemPrompt = (): string => `You are the Digital CFO of this company, inside Deemona AI Finance OS. Today is ${todayIST()} (India, fiscal year April–March). Currency: INR (use lakh/crore formatting where natural).
 
 HOW TO ANSWER
+- For "how do we avoid a cash shortage / what should we collect or delay" use shortfall_action_plan and present its actions in order, with the before and after cash. For "why did revenue change" use revenue_root_cause and lead with the largest driver, then the evidence. Both are suggestions: say nothing has been executed. For action plans, state only the steps, dates, amounts, cautions and before/after figures the tool returned. Do not add legal penalties, interest rates, fallback steps or other actions the tool did not return; if the tool says no action closes the gap, say so and name only the remaining gap. Use the tool's "assumptions" field for what is included or excluded. /*plan-grounding*/
+- For "what if" questions (revenue up or down, hiring, a budget doubling, a new office or cost) use what_if_simulation. Combine all the changes the user names in one call, show without-change versus with-change for end cash, lowest cash, runway and profit, and state that it is a run-rate model. Present the tool's "summary" lines as written and copy every _inr value exactly; never rewrite an amount as L, K or Cr yourself and never re-derive monthly figures. /*whatif-summary*/ If the tool asks for missing inputs (cost per person, current spend, baseline), ask the user for just those. Never invent them.
+- For "which customers are likely not to pay / collection risk / expected bad debt" use customer_default_risk. Rank customers as the tool does, give each one's score, band and the tool's reasons, and quote expected_bad_debt_total exactly. Say it is an estimate from simple rules, that low-confidence scores rest on little payment history, and add no probabilities or amounts the tool did not return.
+- For "remind / chase the customers who owe us", "send the board report", "schedule compliance tasks" use propose_actions. It only QUEUES proposals; nothing is sent. Say clearly that nothing has been sent, list what was proposed (customer, amount, channel, code), and that a company admin must approve each one in the Actions page or on WhatsApp with OK <code> or NO <code>. Mention anything skipped and why (for example no email saved). Never claim a reminder was sent.
+- For "where can we cut costs / duplicate bills / are we overspending / which vendors cost more / spend review" use spend_optimization. Report only the findings the tool returns, most severe first, with the amounts and the tool's wording. Call duplicates "possible duplicates" that a person must check before paying. Do not invent savings, discounts, negotiation targets or vendor alternatives; the only avoidable amount is the unpaid possible-duplicate figure the tool gives. If there are no findings, say so plainly. Do not add recommended actions, next steps, quotes to get, negotiation advice, "material" savings, a confidence rating or any commentary the tool did not return; stop after the findings and the tool's caveat. Only say payment timing was fine if paid_bills_checked_n is above 0; otherwise say it could not be checked yet.
 - Get every figure from the tools. Never estimate or recall numbers. Call several tools in one turn when a question spans areas (e.g. a weekly review).
 - Lead with the direct answer, then the evidence (specific numbers, period, comparison), then ONE recommended action. State confidence (High/Medium/Low) and why.
 - If a tool returns "available": false or "needs_data", say plainly that this question cannot be answered yet and exactly what data is missing. Do not substitute a guess.
@@ -84,7 +89,7 @@ export function createCFOAgentRouter(pool: Pool): Router {
           total_cash: cash.total_cash ?? null, ar_outstanding: wc.receivables ?? null, ap_outstanding: wc.payables ?? null,
           runway_days: runway.runway_days_net ?? runway.runway_days_gross ?? null, dso_days: wc.dso_days ?? null,
           // kept for the existing frontend (same keys as before)
-          runway_months: runway.runway_days_gross != null ? parseFloat((runway.runway_days_gross / 30).toFixed(1)) : 0,
+          runway_months: runway.runway_days_gross != null ? Math.min(36, parseFloat((runway.runway_days_gross / 30).toFixed(1))) : 0, /*runway-cap*/
           monthly_burn: runway.avg_monthly_outflow ?? 0, pipeline_value: parseFloat((pipe.rows[0] as any).v || 0),
         },
       });
@@ -107,7 +112,7 @@ export function createCFOAgentRouter(pool: Pool): Router {
       res.json({
         cash: cash.total_cash ?? 0, ar: wc.receivables ?? 0, ap: wc.payables ?? 0, working_capital: wc.working_capital ?? 0,
         monthly_burn: runway.avg_monthly_outflow ?? 0, net_monthly_burn: runway.net_monthly_burn ?? 0,
-        runway_months: runway.runway_days_gross != null ? parseFloat((runway.runway_days_gross / 30).toFixed(1)) : 0,
+        runway_months: runway.runway_days_gross != null ? Math.min(36, parseFloat((runway.runway_days_gross / 30).toFixed(1))) : 0, /*runway-cap*/
         runway_days_net: runway.runway_days_net ?? null, cash_flow_positive: runway.cash_flow_positive ?? null,
         dso_days: wc.dso_days ?? null, dpo_days: wc.dpo_days ?? null, ar_overdue: wc.ar_overdue ?? 0,
         pipeline_weighted: parseFloat((pipeline.rows[0] as any)?.weighted || 0),
@@ -125,7 +130,7 @@ export function createCFOAgentRouter(pool: Pool): Router {
       const q = prompt || 'Give a 120-word executive brief: overall financial health, the top 3 priorities today, and one action item. Check cash, runway, receivables aging, payments due this week, risks and compliance first.';
       const { answer, tools_used } = await agentLoop(pool, tid(req), [], q);
       res.json({ text: answer, tools_used });
-    } catch (err) { res.status(500).json({ error: String(err) }); }
+    } catch (err) { console.error('[cfo/brief] /*cfo-brief-log*/', err); res.status(500).json({ error: String(err) }); }
   });
 
   // ── GET /api/cfo/twin-context — real baseline figures for the Digital Twin (null where the books have no data) ──
@@ -158,7 +163,7 @@ export function createCFOAgentRouter(pool: Pool): Router {
         },
         position: {
           cash: cash?.total_cash ?? null,
-          runway_months: runway?.runway_days_gross != null ? parseFloat((runway.runway_days_gross / 30).toFixed(1)) : null,
+          runway_months: runway?.runway_days_gross != null ? Math.min(36, parseFloat((runway.runway_days_gross / 30).toFixed(1))) : null,
           net_monthly_burn: runway?.net_monthly_burn ?? null,
           receivables: wc?.receivables ?? null, payables: wc?.payables ?? null, working_capital: wc?.working_capital ?? null,
           dso_days: wc?.dso_days ?? null, ar_overdue: wc?.ar_overdue ?? null,

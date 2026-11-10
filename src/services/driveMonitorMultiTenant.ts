@@ -1,4 +1,5 @@
-﻿// ============================================================
+﻿import { mailFetch } from './mailer';
+// ============================================================
 // Deemona AI Finance OS — Multi-Tenant Drive Monitor
 // File: src/services/driveMonitorMultiTenant.ts
 // Each tenant has their own folder, recipients, API key
@@ -166,7 +167,7 @@ async function sendEmail(recipients: string[], filename: string, fileType: FileT
   </div></body></html>`;
 
   try {
-    const res = await fetch('https://api.resend.com/emails', {
+    const res = await mailFetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${key}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ from: `Deemona Finance OS <${from}>`, to: recipients, subject, html, text: report }),

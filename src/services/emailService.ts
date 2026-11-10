@@ -1,3 +1,4 @@
+import { mailFetch } from './mailer';
 // ============================================================
 // Email Service using Resend (resend.com)
 // Env: RESEND_API_KEY, FROM_EMAIL, FROM_NAME
@@ -23,7 +24,7 @@ export async function sendEmail(opts: EmailOptions): Promise<{ success: boolean;
   const toArray = Array.isArray(opts.to) ? opts.to : [opts.to];
 
   try {
-    const res = await fetch('https://api.resend.com/emails', {
+    const res = await mailFetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${RESEND_KEY}`,

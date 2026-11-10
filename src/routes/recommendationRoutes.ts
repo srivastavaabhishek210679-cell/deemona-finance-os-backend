@@ -63,7 +63,7 @@ export function buildRecommendations(opening: { amount: number; has_entry: boole
   });
 
   // 3. Bills that could be delayed 14 days without breaching the minimum cash level.
-  const pay = items.filter(i => i.kind === 'out' && !i.overdue && daysBetween(today, i.due) <= 30 && daysBetween(today, i.due) >= 0).sort((a, b) => b.amount - a.amount).slice(0, 5);
+  const pay = items.filter(i => i.kind === 'out' && !i.category && !i.overdue && daysBetween(today, i.due) <= 30 && daysBetween(today, i.due) >= 0).sort((a, b) => b.amount - a.amount).slice(0, 5);
   let nDelay = 0;
   for (const b of pay) {
     const after = runForecast(opening.amount, items.map(x => (x === b ? { ...x, due: addDays(x.due, 14) } : x)), o, today);

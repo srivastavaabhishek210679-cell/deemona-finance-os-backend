@@ -10,7 +10,7 @@ import { Router, Request, Response } from 'express';
 import { Pool } from 'pg';
 import { requireAuth } from '../middleware/auth';
 import Anthropic from '@anthropic-ai/sdk';
-import { Resend } from 'resend';
+import { Resend } from '../services/mailer';
 import { REPORT_REGISTRY, reportOverdueAlert, reportCreditBreach, reportImportSummary } from './reportEngine';
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });

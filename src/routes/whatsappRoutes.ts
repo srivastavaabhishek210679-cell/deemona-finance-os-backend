@@ -1,4 +1,5 @@
 import { handleWhatsAppApprovalReply } from '../services/automationEngine';
+import { handleWhatsAppCommand } from '../services/whatsappCommands';
 ﻿import { Router, Request, Response } from 'express';
 import { Pool } from 'pg';
 import { requireAuth } from '../middleware/auth';
@@ -120,7 +121,7 @@ export function createWhatsAppRouter(pool: Pool): Router {
     }
     const { Body, From } = req.body || {};
     let reply = 'Thank you! Your message has been received by Deemona Finance.';
-    try { reply = await handleWhatsAppApprovalReply(pool, From, String(Body || '')); } catch (e) { console.error('[WhatsApp webhook] handler error', e); }
+    try { const cmdReply = await handleWhatsAppCommand(pool, From, String(Body || '')); /*wa-commands*/ reply = cmdReply !== null ? cmdReply : await handleWhatsAppApprovalReply(pool, From, String(Body || '')); } catch (e) { console.error('[WhatsApp webhook] handler error', e); }
     res.set('Content-Type', 'text/xml');
     res.send('<Response><Message>' + xmlEscape(reply) + '</Message></Response>');
   });

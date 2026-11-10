@@ -8,6 +8,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { Pool } from 'pg';
 import { getMemoryService, WriteMemoryInput, MemorySearchOptions, MemoryService } from '../services/memoryService';
+import { requireAuth } from '../middleware/auth';
 
 export function createMemoryRouter(pool: Pool): Router {
   const router = Router();
@@ -16,13 +17,7 @@ export function createMemoryRouter(pool: Pool): Router {
   // ── Auth middleware (reuse your existing one) ────────────
   // We assume req.user = { id, tenantId, role } is set upstream.
   // Adjust if your auth middleware differs.
-  const requireAuth = (req: Request, res: Response, next: NextFunction) => {
-    if (!(req as any).user?.tenantId) {
-      res.status(401).json({ error: 'Unauthorized' });
-      return;
-    }
-    next();
-  };
+  /*mem-auth*/ // uses the shared JWT check (the old local check expected req.user to be set upstream, which never happened)
 
   const tenantId = (req: Request): string => (req as any).user.tenantId;
 

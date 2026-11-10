@@ -27,7 +27,7 @@ const requireAuthOrInternal = (req: any, res: any, next: any) => {
   return requireAuth(req, res, next);
 };
 import Anthropic from '@anthropic-ai/sdk';
-import { Resend } from 'resend';
+import { Resend } from '../services/mailer';
 import * as crypto from 'crypto';
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });

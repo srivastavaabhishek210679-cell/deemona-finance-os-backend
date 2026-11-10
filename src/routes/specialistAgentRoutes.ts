@@ -83,7 +83,7 @@ async function runForecastTool(pool: Pool, tenantId: string, input: any) {
   return {
     as_of: today, has_cash_entry: opening.has_entry, cash_today_inr: inrText(opening.amount),
     open_receivables: { count: recv.length, total_inr: inrText(recv.reduce((a, i) => a + i.amount, 0)) },
-    open_payables: { count: items.length - recv.length, total_inr: inrText(items.filter(i => i.kind === 'out').reduce((a, i) => a + i.amount, 0)) },
+    open_payables: { count: items.filter(i => i.kind === 'out' && !i.category).length, total_inr: inrText(items.filter(i => i.kind === 'out' && !i.category).reduce((a, i) => a + i.amount, 0)), salaries_and_taxes_in_forecast: items.some(i => !!i.category) },
     ...(customerNote ? { customer_scenario: customerNote } : {}),
     cases: cases.map(([label, o, its]) => { const r = runForecast(opening.amount, its, o, today); return {
       case: label, closing_cash_inr: inrText(r.closing), total_receipts_inr: inrText(r.total_in), total_payments_inr: inrText(r.total_out),

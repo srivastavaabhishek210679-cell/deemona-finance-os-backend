@@ -1,4 +1,5 @@
-﻿import { Router, Request, Response } from 'express';
+﻿import { mailFetch } from '../services/mailer';
+import { Router, Request, Response } from 'express';
 /*tenant-iso*/
 import { Pool } from 'pg';
 import { requireAuth } from '../middleware/auth';
@@ -138,7 +139,7 @@ export function createAutomationTestRouter(pool: Pool): Router {
   router.post('/test/gst-reminder', requireAuth, async (req: Request, res: Response) => {
     try {
       const adminEmail = process.env.ADMIN_EMAIL || 'admin@deemona.com';
-      const emailRes = await fetch('https://api.resend.com/emails', {
+      const emailRes = await mailFetch('https://api.resend.com/emails', {
         method: 'POST',
         headers: { 'Authorization': 'Bearer ' + process.env.RESEND_API_KEY, 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -156,7 +157,7 @@ export function createAutomationTestRouter(pool: Pool): Router {
   router.post('/test/payroll-reminder', requireAuth, async (req: Request, res: Response) => {
     try {
       const adminEmail = process.env.ADMIN_EMAIL || 'admin@deemona.com';
-      const emailRes = await fetch('https://api.resend.com/emails', {
+      const emailRes = await mailFetch('https://api.resend.com/emails', {
         method: 'POST',
         headers: { 'Authorization': 'Bearer ' + process.env.RESEND_API_KEY, 'Content-Type': 'application/json' },
         body: JSON.stringify({

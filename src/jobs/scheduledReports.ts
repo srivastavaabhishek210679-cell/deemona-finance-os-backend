@@ -10,7 +10,7 @@
 // Calls the app's own endpoints with "Bearer internal-<CRON_SECRET>.<tenantId>".
 // ============================================================
 import { Pool } from 'pg';
-import { Resend } from 'resend';
+import { Resend } from '../services/mailer';
 
 type Json = Record<string, any>;
 type Ctx = { period: string };

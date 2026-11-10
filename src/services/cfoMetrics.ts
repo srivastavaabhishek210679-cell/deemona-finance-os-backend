@@ -7,6 +7,14 @@
 // ============================================================
 import { Pool } from 'pg';
 import { cashAsOf } from './cashPosition';
+import { loadForecastInputs } from './cashForecast';
+import { buildActionPlan } from './actionPlan';
+import { proposeCollectionActions, proposeBoardReport, proposeComplianceTasks } from './controlledActions';
+import { loadRiskInputs } from './collectionRiskData';
+import { scoreCollectionRisk } from './collectionRisk';
+import { loadSpendInputs } from './spendOptimizationData';
+import { analyzeSpend } from './spendOptimization';
+import { simulateWhatIf } from './whatIf';
 import { ensurePaymentEventsTable } from '../routes/paymentEventsRoutes';
 import {
   ensureCfoSetupTables, DIM_KINDS, DimKind, DIM_COLUMN, TARGET_METRICS, FORECAST_METRICS, PERIOD_TYPES,
@@ -167,6 +175,266 @@ export async function recordForecasts(pool: Pool, tenantId: string): Promise<num
 
 // ── Metric registry ──────────────────────────────────────────
 export const METRICS: Record<string, Metric> = {
+
+  /*decision-tools*/
+  shortfall_action_plan: {
+    description: 'When cash is forecast to fall below a minimum, returns a concrete plan: which customer invoices to collect in full and on time and which vendor bills to pay later, step by step, with how much each step lifts the lowest cash point and the cash position before and after. Use for "how do we avoid a cash shortage", "what should we collect or delay", "how do we fix the cash gap". Suggestions only; nothing is executed.',
+    input_schema: { type: 'object', properties: {
+      days: { type: 'integer', description: 'Horizon in days. Default 90, max 180.' },
+      min_cash: { type: 'number', description: 'Minimum cash to keep, in INR. Default 0.' },
+      collection_rate: { type: 'number', description: 'Share of receivables assumed to arrive on time, 0-1. Default 0.7.' },
+      defer_days: { type: 'integer', description: 'How many days a deferred bill is paid later. Default 14.' },
+    } },
+    async run(pool, t, input) {
+      const { opening, items, today } = await loadForecastInputs(pool, t);
+      const plan: any = buildActionPlan(opening, items, today, {
+        days: clampInt(input?.days, 90, 7, 180), minCash: Math.max(0, num(input?.min_cash)),
+        collectionRate: input?.collection_rate !== undefined ? Math.min(1, Math.max(0, num(input.collection_rate))) : 0.7,
+        deferDays: clampInt(input?.defer_days, 14, 1, 60),
+      });
+      plan.collect_total_amount = plan.collect_total; plan.defer_total_amount = plan.defer_total;
+      return plan;
+    },
+  },
+
+  /*what-if*/
+  what_if_simulation: {
+    description: 'What-if simulator. Models the effect of changes on cash, profit and runway over the next N months against a no-change baseline built from the last completed months of actuals: revenue up/down by a percentage, hiring or cutting N people, multiplying a budget line (e.g. marketing doubles), a new recurring cost (e.g. new office rent) and one-time costs (e.g. fit-out). Use for "what happens if revenue drops 20%", "if we hire 50 people", "if marketing budget doubles", "if we open a new office". Run-rate model: cash moves with operating profit, not invoice-by-invoice timing. Several changes can be combined in one call. If there is no history, pass assume_monthly or ask the user for typical monthly figures.',
+    input_schema: { type: 'object', properties: {
+      months: { type: 'integer', description: 'Horizon in months. Default 12, max 24.' },
+      revenue_change_pct: { type: 'number', description: 'Revenue change in percent, e.g. -20 for a 20% drop, 15 for 15% growth.' },
+      revenue_change_start_month: { type: 'integer', description: 'Month the revenue change starts (1 = next month). Default 1.' },
+      costs_follow_revenue: { type: 'boolean', description: 'If true, vendor/purchase costs move by the same percentage as revenue (cost of sales). Default false.' },
+      headcount_change: { type: 'integer', description: 'People hired (positive) or reduced (negative).' },
+      cost_per_head_monthly: { type: 'number', description: 'Monthly cost to company per person in INR. Defaults to the average from payroll runs.' },
+      headcount_start_month: { type: 'integer', description: 'Month the headcount change starts. Default 1.' },
+      budget_change: { type: 'object', description: 'Scale a budget line, e.g. marketing doubles.', properties: {
+        name: { type: 'string', description: 'Budget or department name to look up, e.g. marketing.' },
+        multiplier: { type: 'number', description: '2 = doubles, 0.5 = halves.' },
+        current_monthly: { type: 'number', description: 'Current monthly spend in INR if no budget with that name exists.' },
+        start_month: { type: 'integer', description: 'Default 1.' } } },
+      new_monthly_cost: { type: 'object', description: 'A new recurring monthly cost, e.g. rent for a new office.', properties: {
+        label: { type: 'string' }, amount: { type: 'number', description: 'INR per month.' }, start_month: { type: 'integer', description: 'Default 1.' } } },
+      one_time_cost: { type: 'object', description: 'A one-time cost, e.g. office fit-out.', properties: {
+        label: { type: 'string' }, amount: { type: 'number', description: 'INR.' }, month: { type: 'integer', description: 'Month it is paid. Default 1.' } } },
+      assume_monthly: { type: 'object', description: 'Override or supply baseline monthly figures in INR when history is missing.', properties: {
+        revenue: { type: 'number' }, vendor_costs: { type: 'number' }, payroll: { type: 'number' }, other_costs: { type: 'number' } } },
+    } },
+    async run(pool, t, input) {
+      const months = clampInt(input?.months, 12, 1, 24);
+      const opening = await cashAsOf(pool, t);
+      const hist = await rows(pool, "WITH ms AS (SELECT (date_trunc('month', CURRENT_DATE) - make_interval(months => g))::date AS m FROM generate_series(1, 3) g) SELECT " +
+        "(SELECT COALESCE(SUM(subtotal),0) FROM ar_invoices WHERE tenant_id=$1 AND status NOT IN ('draft','cancelled') AND date::date >= m AND date::date < m + interval '1 month') AS revenue, " +
+        "(SELECT COALESCE(SUM(subtotal),0) FROM ap_invoices WHERE tenant_id=$1 AND status NOT IN ('draft','rejected') AND date::date >= m AND date::date < m + interval '1 month') AS vendor_costs, " +
+        "(SELECT COALESCE(SUM(total_gross + COALESCE(total_employer_pf,0)),0) FROM payroll_runs WHERE tenant_id=$1 AND year = EXTRACT(YEAR FROM m)::int AND month = EXTRACT(MONTH FROM m)::int) AS payroll, " +
+        "(SELECT COALESCE(MAX(total_employees),0) FROM payroll_runs WHERE tenant_id=$1 AND year = EXTRACT(YEAR FROM m)::int AND month = EXTRACT(MONTH FROM m)::int) AS employees, " +
+        "(SELECT COALESCE(SUM(total_amount),0) FROM expense_claims WHERE tenant_id=$1 AND status='approved' AND date::date >= m AND date::date < m + interval '1 month') AS claims FROM ms", [t])
+        .catch(async () => rows(pool, "WITH ms AS (SELECT (date_trunc('month', CURRENT_DATE) - make_interval(months => g))::date AS m FROM generate_series(1, 3) g) SELECT " +
+          "(SELECT COALESCE(SUM(subtotal),0) FROM ar_invoices WHERE tenant_id=$1 AND status NOT IN ('draft','cancelled') AND date::date >= m AND date::date < m + interval '1 month') AS revenue, " +
+          "(SELECT COALESCE(SUM(subtotal),0) FROM ap_invoices WHERE tenant_id=$1 AND status NOT IN ('draft','rejected') AND date::date >= m AND date::date < m + interval '1 month') AS vendor_costs, 0 AS payroll, 0 AS employees, 0 AS claims FROM ms", [t]));
+      const withData = hist.filter(h => num(h.revenue) + num(h.vendor_costs) + num(h.payroll) + num(h.claims) > 0);
+      const nUse = withData.length;
+      const avg = (k: string): number => (nUse ? withData.reduce((s, h) => s + num(h[k]), 0) / nUse : 0);
+      const emps = withData.filter(h => num(h.employees) > 0);
+      const avgEmp = emps.length ? emps.reduce((s, h) => s + num(h.employees), 0) / emps.length : 0;
+      const am = input?.assume_monthly || {};
+      const pick = (v: any, d: number): number => (v !== undefined && v !== null && Number.isFinite(Number(v)) ? Math.max(0, Number(v)) : d);
+      const base = { revenue: pick(am.revenue, avg('revenue')), vendor_costs: pick(am.vendor_costs, avg('vendor_costs')), payroll: pick(am.payroll, avg('payroll')),
+        claims: pick(am.other_costs, avg('claims')), employees: avgEmp || null, months_used: nUse,
+        source: Object.keys(am).length ? (nUse ? 'actuals with your assumptions' : 'your assumptions') : 'actuals' };
+      if (!(base.revenue + base.vendor_costs + base.payroll + base.claims > 0)) {
+        return needsData(['3 completed months of invoices, payroll or expense claims', 'or assume_monthly figures'],
+          'There is no history in the last 3 completed months to build a baseline. Ask the user for typical monthly revenue and costs and call again with assume_monthly.');
+      }
+      const costPerHeadAuto = avgEmp > 0 && avg('payroll') > 0 ? avg('payroll') / avgEmp : 0;
+      const hc = Math.round(num(input?.headcount_change));
+      const costPerHead = input?.cost_per_head_monthly !== undefined ? Math.max(0, num(input.cost_per_head_monthly)) : costPerHeadAuto;
+      if (hc !== 0 && !(costPerHead > 0)) {
+        return needsData(['cost_per_head_monthly'], 'There is no payroll history to work out the monthly cost per person. Ask the user what a new hire costs per month (salary plus employer contributions) and call again with cost_per_head_monthly.');
+      }
+      const startOf = (v: any): number => clampInt(v, 1, 1, months);
+      const extra: { label: string; amount: number; start: number }[] = [];
+      const notes: string[] = [];
+      const bc = input?.budget_change;
+      if (bc && Number.isFinite(Number(bc.multiplier)) && Number(bc.multiplier) > 0) {
+        const mult = Math.min(10, Number(bc.multiplier));
+        let monthly = bc.current_monthly !== undefined ? Math.max(0, num(bc.current_monthly)) : 0, matched: string | null = null;
+        if (!monthly && bc.name) {
+          const q = await rows(pool, "SELECT name, department, fiscal_year, total_budgeted FROM budgets WHERE tenant_id=$1 AND (name ILIKE $2 OR department ILIKE $2) AND total_budgeted > 0 ORDER BY fiscal_year DESC LIMIT 1", [t, '%' + String(bc.name).slice(0, 60) + '%']).catch(() => []);
+          if (q.length) { monthly = num(q[0].total_budgeted) / 12; matched = q[0].name + (q[0].department ? ' / ' + q[0].department : '') + ' (FY ' + q[0].fiscal_year + ')'; notes.push('Monthly budget taken as the annual budget of ' + matched + ' divided by 12.'); }
+        }
+        if (!(monthly > 0)) return needsData(['budget_change.current_monthly'], 'No budget named "' + String(bc.name || '') + '" was found. Ask the user for the current monthly spend on it and call again with budget_change.current_monthly.');
+        extra.push({ label: (bc.name || 'budget') + ' x' + mult, amount: monthly * (mult - 1), start: startOf(bc.start_month) });
+      }
+      const nm = input?.new_monthly_cost;
+      if (nm && num(nm.amount) > 0) extra.push({ label: String(nm.label || 'new monthly cost').slice(0, 60), amount: num(nm.amount), start: startOf(nm.start_month) });
+      const ot = input?.one_time_cost;
+      const once = ot && num(ot.amount) > 0 ? [{ label: String(ot.label || 'one-time cost').slice(0, 60), amount: num(ot.amount), month: startOf(ot.month) }] : [];
+      const rc = input?.revenue_change_pct !== undefined ? Math.max(-100, Math.min(1000, num(input.revenue_change_pct))) : 0;
+      if (rc === 0 && hc === 0 && !extra.length && !once.length) return { error: 'No change was specified. Give at least one of: revenue_change_pct, headcount_change, budget_change, new_monthly_cost, one_time_cost.' };
+      const sim: any = simulateWhatIf(opening.amount, base, {
+        months, revenue_change_pct: rc, revenue_start: startOf(input?.revenue_change_start_month), costs_follow_revenue: !!input?.costs_follow_revenue,
+        headcount_change: hc, cost_per_head: costPerHead, headcount_start: startOf(input?.headcount_change_start_month ?? input?.headcount_start_month), extra_monthly: extra, one_time: once,
+      });
+      sim.changes_applied = { revenue_change_pct: rc || undefined, vendor_costs_follow_revenue: input?.costs_follow_revenue ? true : undefined, headcount_change: hc || undefined, cost_per_head: hc ? Math.round(costPerHead) : undefined,
+        recurring: extra.map(e => ({ label: e.label, amount: Math.round(e.amount), from_month_no: e.start })), one_time: once };
+      sim.assumptions = [
+        'Run-rate model: the baseline is the average of the last ' + (nUse || 'assumed') + ' completed months; cash moves with operating profit and ignores invoice timing.',
+        'Payroll cost includes employer provident fund where payroll runs exist. Taxes on profit, GST and loan repayments are not modelled.',
+        'Vendor costs stay flat unless costs_follow_revenue is true.', ...notes];
+      if (!opening.has_entry) sim.warning = 'No cash balance has been entered, so opening cash is zero and the cash figures are not meaningful. Record the current cash balance.';
+      return sim;
+    },
+  },
+
+  /*collection-risk*/
+  customer_default_risk: {
+    description: 'Collection risk: scores every customer with open invoices from 0 to 100 (High 70+, Medium 40-69, Low under 40) using their payment history and overdue invoices, ranks customers by expected loss, and estimates expected bad debt for the next quarter. Returns the reasons behind each score and the method. Use for "which customers are most likely not to pay", "expected bad debt", "collection risk score", "who should we worry about". Rule-based estimate, not an accounting provision.',
+    input_schema: { type: 'object', properties: { limit: { type: 'integer', description: 'How many customers to list, default 10, max 50.' } } },
+    async run(pool, t, input) {
+      const { events, open, today } = await loadRiskInputs(pool, t);
+      if (!open.length) return { as_of: today, customers_scored: 0, message: 'There are no open customer invoices, so there is no collection risk to score.' };
+      return scoreCollectionRisk(events, open, today, clampInt(input?.limit, 10, 1, 50));
+    },
+  },
+
+  /*spend-optimization*/
+  spend_optimization: {
+    description: 'Spend review: vendor concentration, vendors whose spend jumped, POSSIBLE duplicate vendor bills (same vendor and amount close in date), paying bills too early or late, and budget overruns, each with the rule that triggered it. Use for "where can we cut costs", "any duplicate bills", "are we overspending", "which vendors are costing more", "spend review". Rule-based; possible duplicates must be checked by a person. It does not estimate negotiation savings.',
+    input_schema: { type: 'object', properties: { limit: { type: 'integer', description: 'How many findings to list, default 12, max 50.' } } },
+    async run(pool, t, input) {
+      const { bills, budgets, today } = await loadSpendInputs(pool, t);
+      if (!bills.length) return { as_of: today, message: 'There are no vendor bills recorded yet, so there is no spend to review.' };
+      return analyzeSpend(bills, budgets, today, clampInt(input?.limit, 12, 1, 50));
+    },
+  },
+
+  /*propose-actions*/
+  propose_actions: {
+    description: 'Queues PROPOSED actions for a company admin to approve; it never sends or changes anything itself. kind payment_reminders proposes reminders to customers with overdue invoices (ranked by collection risk, email and/or WhatsApp); board_report proposes the monthly board summary email; compliance_tasks proposes the next statutory due dates (GST, TDS, PF/ESI, advance tax) as compliance items. Use for "remind the customers who owe us", "chase overdue invoices", "send the board report", "schedule compliance tasks". After calling, tell the user the proposals now wait in the Actions page (or can be approved on WhatsApp with OK <code> / NO <code>) and that nothing has been sent yet.',
+    input_schema: { type: 'object', properties: {
+      kind: { type: 'string', enum: ['payment_reminders', 'board_report', 'compliance_tasks'] },
+      channels: { type: 'array', items: { type: 'string', enum: ['email', 'whatsapp'] }, description: 'For payment_reminders. Default email.' },
+      min_days_overdue: { type: 'integer', description: 'For payment_reminders: only customers with an invoice at least this many days overdue. Default 7.' },
+      limit: { type: 'integer', description: 'For payment_reminders: max customers. Default 10.' },
+    }, required: ['kind'] },
+    async run(pool, t, input) {
+      const by = 'digital-cfo';
+      let r: any;
+      if (input?.kind === 'payment_reminders') r = await proposeCollectionActions(pool, t, { channels: Array.isArray(input.channels) ? input.channels : undefined, min_days_overdue: input.min_days_overdue, limit: input.limit }, by);
+      else if (input?.kind === 'board_report') r = await proposeBoardReport(pool, t, null, by);
+      else if (input?.kind === 'compliance_tasks') r = await proposeComplianceTasks(pool, t, by);
+      else return { error: 'kind must be payment_reminders, board_report or compliance_tasks' };
+      return { kind: input.kind, proposals_created_count: r.proposed.length, proposed: r.proposed, skipped: r.skipped,
+        status_note: 'These are PROPOSALS. Nothing has been sent or changed. A company admin must approve each one in the Actions page, or on WhatsApp with OK <code> or NO <code>.' };
+    },
+  },
+
+  revenue_root_cause: {
+    description: 'Explains WHY revenue moved between a period and the comparable prior period: how much came from lost customers, new customers, customers who bought less or more; price versus volume from invoice lines; which business unit, region or product drove it; and whether last year showed the same seasonal move. Use for "why did revenue drop/rise", "what changed in sales". Figures are pre-tax invoiced revenue.',
+    input_schema: { type: 'object', properties: {
+      period: { type: 'string', enum: ['week_vs_prev_week', 'mtd_vs_prev_mtd', 'month_vs_prev_month', 'last_quarter_vs_prev_quarter', 'ytd_vs_prev_ytd'], description: 'Default month_vs_prev_month (last full month vs the one before).' },
+      limit: { type: 'integer', description: 'How many top customers or items to list. Default 5.' },
+    } },
+    async run(pool, t, input) {
+      const period = input?.period || 'month_vs_prev_month';
+      const pr = periodRanges(period);
+      if (!pr) return { error: 'unknown period' };
+      const limit = clampInt(input?.limit, 5, 1, 15);
+      const [c0, c1, p0, p1] = [ymd(pr.cur[0]), ymd(pr.cur[1]), ymd(pr.prev[0]), ymd(pr.prev[1])];
+      const yb = (s: string) => { const d = new Date(s + 'T00:00:00Z'); d.setUTCFullYear(d.getUTCFullYear() - 1); return d.toISOString().slice(0, 10); };
+      const byCust = async (a: string, b: string) => rows(pool,
+        "SELECT x.customer_id::text AS id, COALESCE(c.name,'Unknown') AS name, SUM(x.subtotal) AS v, COUNT(*) AS n FROM ar_invoices x LEFT JOIN customers c ON c.id=x.customer_id AND c.tenant_id=x.tenant_id WHERE x.tenant_id=$1 AND x.status NOT IN ('draft','cancelled') AND x.date::date BETWEEN $2 AND $3 GROUP BY 1,2", [t, a, b]);
+      const total = async (a: string, b: string) => num((await rows(pool, "SELECT COALESCE(SUM(subtotal),0) AS v FROM ar_invoices WHERE tenant_id=$1 AND status NOT IN ('draft','cancelled') AND date::date BETWEEN $2 AND $3", [t, a, b]))[0].v);
+      const [cur, prev, lyCur, lyPrev] = await Promise.all([byCust(c0, c1), byCust(p0, p1), total(yb(c0), yb(c1)), total(yb(p0), yb(p1))]);
+      const curSum = cur.reduce((s, r) => s + num(r.v), 0), prevSum = prev.reduce((s, r) => s + num(r.v), 0);
+      const change = curSum - prevSum;
+      const base: Json = { period, current_range: { from: c0, to: c1 }, previous_range: { from: p0, to: p1 },
+        current_revenue: round(curSum, 0), previous_revenue: round(prevSum, 0), revenue_change: round(change, 0), change_pct: pct(curSum, prevSum) };
+      if (curSum === 0 && prevSum === 0) return { ...base, findings: ['No invoices dated in either period, so there is nothing to explain. Possible causes: not yet invoiced, data not loaded, or a genuine gap.'] };
+
+      // customer attribution: lost + new + decreased + increased = total change exactly
+      const pm = new Map(prev.map(r => [r.id, r])); const cm = new Map(cur.map(r => [r.id, r]));
+      const ids = new Set<string>([...Array.from(pm.keys()), ...Array.from(cm.keys())]);
+      const lost: Json[] = [], added: Json[] = [], down: Json[] = [], up: Json[] = [];
+      ids.forEach(id => {
+        const a = num(pm.get(id)?.v), b = num(cm.get(id)?.v), name = (cm.get(id) || pm.get(id)).name, d = b - a;
+        if (a > 0 && b === 0) lost.push({ customer: name, previous_revenue: round(a, 0), current_revenue: 0, revenue_change: round(d, 0) });
+        else if (a === 0 && b > 0) added.push({ customer: name, previous_revenue: 0, current_revenue: round(b, 0), revenue_change: round(d, 0) });
+        else if (d < 0) down.push({ customer: name, previous_revenue: round(a, 0), current_revenue: round(b, 0), revenue_change: round(d, 0), change_pct: pct(b, a) });
+        else if (d > 0) up.push({ customer: name, previous_revenue: round(a, 0), current_revenue: round(b, 0), revenue_change: round(d, 0), change_pct: pct(b, a) });
+      });
+      const sum = (l: Json[]) => l.reduce((s, x) => s + x.revenue_change, 0);
+      const worst = (l: Json[]) => l.sort((x, y) => x.revenue_change - y.revenue_change).slice(0, limit);
+      const best = (l: Json[]) => l.sort((x, y) => y.revenue_change - x.revenue_change).slice(0, limit);
+      const customers = {
+        lost_customers: { count: lost.length, revenue_change: round(sum(lost), 0), top: worst(lost) },
+        new_customers: { count: added.length, revenue_change: round(sum(added), 0), top: best(added) },
+        existing_customers_bought_less: { count: down.length, revenue_change: round(sum(down), 0), top: worst(down) },
+        existing_customers_bought_more: { count: up.length, revenue_change: round(sum(up), 0), top: best(up) },
+      };
+
+      // invoice lines: price vs volume by item description
+      let priceVolume: Json = { available: false, reason: 'No invoice lines found for these periods.' };
+      try {
+        const lines = async (a: string, b: string) => rows(pool,
+          "SELECT LOWER(TRIM(l.description)) AS item, MIN(l.description) AS label, SUM(l.quantity) AS q, SUM(l.amount) AS amt FROM ar_invoice_lines l JOIN ar_invoices x ON x.id=l.ar_invoice_id WHERE x.tenant_id=$1 AND x.status NOT IN ('draft','cancelled') AND x.date::date BETWEEN $2 AND $3 GROUP BY 1", [t, a, b]);
+        const [lc, lp] = await Promise.all([lines(c0, c1), lines(p0, p1)]);
+        const lcSum = lc.reduce((s, r) => s + num(r.amt), 0), lpSum = lp.reduce((s, r) => s + num(r.amt), 0);
+        if ((lcSum > 0 || lpSum > 0) && (curSum > 0 || prevSum > 0)) {
+          const pmap = new Map(lp.map(r => [r.item, r])), cmap = new Map(lc.map(r => [r.item, r]));
+          let priceE = 0, volE = 0, newE = 0, lostE = 0; const movers: Json[] = [];
+          new Set<string>([...Array.from(pmap.keys()), ...Array.from(cmap.keys())]).forEach(k => {
+            const a = pmap.get(k), b = cmap.get(k), qa = num(a?.q), qb = num(b?.q), aa = num(a?.amt), ab = num(b?.amt);
+            if (!a) { newE += ab; movers.push({ item: b.label, effect: 'new item', revenue_change: round(ab, 0) }); return; }
+            if (!b) { lostE -= aa; movers.push({ item: a.label, effect: 'item not sold this period', revenue_change: round(-aa, 0) }); return; }
+            if (qa > 0 && qb > 0) {
+              const pa = aa / qa, pb = ab / qb; const v = (qb - qa) * pa, p = (pb - pa) * qb;
+              volE += v; priceE += p; movers.push({ item: b.label, effect: Math.abs(p) > Math.abs(v) ? 'price' : 'volume', revenue_change: round(ab - aa, 0), average_price_change_pct: pct(pb, pa), quantity_change_pct: pct(qb, qa) });
+            } else { volE += ab - aa; movers.push({ item: b.label, effect: 'volume', revenue_change: round(ab - aa, 0) }); }
+          });
+          priceVolume = { available: true, price_effect: round(priceE, 0), volume_effect: round(volE, 0), new_items_effect: round(newE, 0), items_not_sold_effect: round(lostE, 0),
+            line_coverage_pct: curSum > 0 ? round((lcSum / curSum) * 100, 0) : null,
+            biggest_movers: movers.sort((x, y) => Math.abs(y.revenue_change) - Math.abs(x.revenue_change)).slice(0, limit),
+            caveat: 'Items are matched by invoice line description; renamed items show as new/not sold.' };
+        }
+      } catch { /* lines table missing: leave unavailable */ }
+
+      // business unit / region / product
+      const dims: Json = {};
+      for (const kind of DIM_KINDS) {
+        try {
+          const d: any = await METRICS.breakdown_by_dimension.run(pool, t, { dimension: kind, measure: 'revenue', period });
+          if (d && !d.error && d.available !== false && Array.isArray(d.items)) {
+            const moved = d.items.filter((x: any) => x.name !== 'Untagged').map((x: any) => ({ name: x.name, previous_revenue: x.previous, current_revenue: x.current, revenue_change: round(x.current - x.previous, 0), change_pct: x.change_pct }))
+              .sort((x: any, y: any) => x.revenue_change - y.revenue_change);
+            dims[kind] = { biggest_decliners: moved.filter((x: any) => x.revenue_change < 0).slice(0, limit), biggest_gainers: moved.filter((x: any) => x.revenue_change > 0).reverse().slice(0, limit), untagged_share_pct: d.untagged_share_pct, warning: d.warning };
+          } else dims[kind] = { available: false, reason: d?.reason || 'not set up' };
+        } catch { dims[kind] = { available: false, reason: 'not set up' }; }
+      }
+
+      // seasonality: did the same two periods move the same way a year earlier?
+      const lyPct = pct(lyCur, lyPrev), curPct = pct(curSum, prevSum);
+      const seasonality: Json = (lyPrev > 0 && lyCur > 0 && lyPct !== null) ? {
+        available: true, same_move_last_year_pct: lyPct, this_year_pct: curPct,
+        seasonal_pattern_likely: curPct !== null && Math.sign(lyPct) === Math.sign(curPct) && Math.abs(lyPct) >= Math.abs(curPct) * 0.5,
+      } : { available: false, reason: 'Not enough invoices a year earlier to compare.' };
+
+      // plain-language findings (all numbers copied from above; nothing recomputed by the model)
+      const findings: string[] = [];
+      const cn = (n: number): string => n + (n === 1 ? ' customer' : ' customers');
+      if (lost.length) findings.push(cn(lost.length) + (lost.length === 1 ? ' who bought' : ' who bought') + ' in the prior period did not buy this period.');
+      if (added.length) findings.push(cn(added.length) + ' new to the period bought this period.');
+      if (down.length) findings.push(cn(down.length) + ' who bought in both periods bought less.');
+      if (up.length) findings.push(cn(up.length) + ' who bought in both periods bought more.');
+      if (priceVolume.available && Math.abs(priceVolume.price_effect) > Math.abs(priceVolume.volume_effect) * 0.5) findings.push('Price changes contributed materially (see price_effect).');
+      if (seasonality.available && seasonality.seasonal_pattern_likely) findings.push('The same two periods moved in the same direction last year, so part of this may be seasonal.');
+      const dominant = ['lost_customers', 'new_customers', 'existing_customers_bought_less', 'existing_customers_bought_more']
+        .map(k => ({ k, v: (customers as any)[k].revenue_change })).filter(x => change < 0 ? x.v < 0 : x.v > 0).sort((a, b) => Math.abs(b.v) - Math.abs(a.v))[0];
+      return { ...base, largest_customer_driver: dominant ? dominant.k : null, customers, price_and_volume: priceVolume, by_dimension: dims, seasonality, findings,
+        limits: ['Revenue is invoiced pre-tax revenue by invoice date.', 'Credit notes and cancelled invoices are excluded.', 'Competitor or market causes are not in the data.'] };
+    },
+  },
 
   cash_position: {
     description: 'Current cash: the balance the user entered manually plus receipts less payments recorded since. No bank data is held.',

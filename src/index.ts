@@ -1,3 +1,5 @@
+import 'dotenv/config'; // must be first: other files read settings when they load
+import './smtpMode';
 import { auditTrailMiddleware, createAuditTrailRouter } from './routes/auditTrailRoutes';
 import dotenv from 'dotenv';
 import { createNetSuiteRouter, startNetSuitePoller } from './routes/netsuiteRoutes';
@@ -40,6 +42,11 @@ import { createCommandCenterRouter } from './routes/commandCenterRoutes';
 import { createPaymentPlanRouter } from './routes/paymentPlanRoutes';
 import { createRiskRouter } from './routes/riskRoutes';
 import { createRecommendationRouter } from './routes/recommendationRoutes';
+import { createActionPlanRouter } from './routes/actionPlanRoutes';
+import { createCollectionRiskRouter } from './routes/collectionRiskRoutes';
+import { createSpendOptimizationRouter } from './routes/spendOptimizationRoutes';
+import { createActionsRouter } from './routes/actionsRoutes';
+import { startActionProposalJob } from './services/controlledActions';
 import { createCashForecastRouter } from './routes/cashForecastRoutes';
 import { createSpecialistRouter } from './routes/specialistAgentRoutes';
 import { createCFOAgentRouter } from './routes/cfoAgentRoutes';
@@ -86,6 +93,14 @@ import {
 
 const app = express();
 app.set('trust proxy', 1); // Required for Render/reverse proxy
+/*proxy-prefix*/
+// MilesWeb's proxy forwards /api/x as /x. Put the prefix back so existing routes match.
+if (process.env.PROXY_STRIPS_API === '1') {
+  app.use((req, _res, next) => {
+    if (!req.url.startsWith('/api/') && req.url !== '/api' && !req.url.startsWith('/health')) req.url = '/api' + req.url;
+    next();
+  });
+}
 const PORT = parseInt(process.env.PORT ?? '4000');
 
 // ── Security & parsing ────────────────────────────────────────
@@ -156,6 +171,10 @@ app.use('/api/webhook-in', createWebhookInboundRouter(pool));
 app.use('/api/cash-position', createCashPositionRouter(pool));
 app.use('/api/cash-forecast', createCashForecastRouter(pool));
 app.use('/api/recommendations', createRecommendationRouter(pool));
+app.use('/api/action-plan', createActionPlanRouter(pool));
+app.use('/api/collection-risk', createCollectionRiskRouter(pool));
+app.use('/api/spend-optimization', createSpendOptimizationRouter(pool));
+app.use('/api/actions', createActionsRouter(pool));
 app.use('/api/risk', createRiskRouter(pool));
 app.use('/api/payment-plan', createPaymentPlanRouter(pool));
 app.use('/api/command-center', createCommandCenterRouter(pool));
@@ -256,6 +275,7 @@ app.post('/api/brief', async (req: express.Request, res: express.Response) => {
 
   setupCDC(pool);
   startCfoSnapshotJob(pool);
+  startActionProposalJob(pool);
   startCfoProactiveJob(pool);
   startScheduledReports(pool);
 app.use('/api/stream', createSSERouter(pool));
@@ -438,7 +458,7 @@ cron.schedule('* * * * *', async () => {
         }
         if (!rep) continue;
         const { subject, html } = rep;
-        const { Resend } = await import('resend');
+        const { Resend } = await import('./services/mailer');
         const resend = new Resend(process.env.RESEND_API_KEY);
         const { error } = await resend.emails.send({ from: 'Deemona Finance OS <onboarding@resend.dev>', to: sched.email, subject, html });
         if (!error) {

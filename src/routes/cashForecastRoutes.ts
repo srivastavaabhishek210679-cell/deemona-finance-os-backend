@@ -42,13 +42,13 @@ const same = (a: FcOpts, b: FcOpts) => a.ar_delay_days === b.ar_delay_days && a.
 async function build(pool: Pool, tenantId: string, custom: FcOpts) {
   const base: FcOpts = { ...custom, ar_delay_days: 0, collection_pct: 100, ap_delay_days: 0 };
   const slow: FcOpts = { ...custom, ar_delay_days: 30, collection_pct: 100, ap_delay_days: 0 };
-  const { opening, items, today } = await loadForecastInputs(pool, tenantId);
+  const { opening, items, today, basis } = await loadForecastInputs(pool, tenantId);
   const scenarios: any[] = [
     { key: 'base', label: 'As booked', ...runForecast(opening.amount, items, base, today) },
     { key: 'slow30', label: 'Customers pay 30 days late', ...runForecast(opening.amount, items, slow, today) },
   ];
   if (!same(custom, base) && !same(custom, slow)) scenarios.push({ key: 'custom', label: 'Your scenario', ...runForecast(opening.amount, items, custom, today) });
-  return { opening, items, today, scenarios };
+  return { opening, items, today, scenarios, basis };
 }
 
 const SYSTEM = `You are a finance analyst explaining a cash forecast to the owner of a small Indian business.
@@ -57,7 +57,7 @@ Rules:
 - 120 to 170 words, plain language, no jargon, no markdown headings. Use short paragraphs; at most 3 bullet points starting with "- ".
 - Cover: (1) where cash is heading and the lowest point, (2) which receivable or bill matters most and whether one customer is a concentration risk, (3) what changes if customers pay late, (4) one or two practical next steps.
 - If has_cash_entry is false, say the forecast starts from zero and the owner should enter a cash balance first.
-- Say plainly what the forecast leaves out: salaries, taxes and unbilled sales unless monthly amounts were entered.
+- Say plainly what the forecast leaves out: unbilled sales, advance tax and TDS on vendor payments. Salaries, PF, ESIC, TDS on salary, professional tax and GST are included when payroll_and_taxes.included is true (say in one short phrase what basis is given); if it is false, say they are not included.
 - Do not give investment, tax or legal advice.`;
 
 const lastCall = new Map<string, number>();
@@ -78,12 +78,15 @@ export function createCashForecastRouter(pool: Pool): Router {
   router.get('/', requireAuth, async (req: Request, res: Response) => {
     try {
       const custom = parseOpts(req.query);
-      const { opening, items, today, scenarios } = await build(pool, tid(req), custom);
-      const upcoming = items.map(i => ({ ...i })).sort((a, b) => a.due.localeCompare(b.due)).slice(0, 25);
+      /*payroll-tax-routes*/
+      const { opening, items, today, scenarios, basis } = await build(pool, tid(req), custom);
+      const soon = new Date(new Date(today + 'T00:00:00Z').getTime() + 45 * 86400000).toISOString().slice(0, 10);
+      const upcoming = items.filter(i => !i.category || i.due <= soon).map(i => ({ ...i })).sort((a, b) => a.due.localeCompare(b.due)).slice(0, 25);
       res.json({
         as_of: today, has_cash_entry: opening.has_entry, opening: opening.amount, scenarios, upcoming,
-        counts: { receivables: items.filter(i => i.kind === 'in').length, payables: items.filter(i => i.kind === 'out').length },
-        note: 'Built only from your open invoices and bills plus the assumptions you set. Salaries, taxes and new sales that are not yet recorded are not included unless you enter them as monthly amounts.',
+        counts: { receivables: items.filter(i => i.kind === 'in').length, payables: items.filter(i => i.kind === 'out' && !i.category).length, payroll_and_tax_items: items.filter(i => !!i.category).length },
+        basis,
+        note: 'Built from your open invoices and bills, your payroll and GST (see the basis lines) and the assumptions you set. New sales that are not yet recorded, advance tax and TDS on vendor payments are not included unless you enter them as monthly amounts.',
       });
     } catch (err) { res.status(500).json({ error: String(err) }); }
   });
@@ -96,8 +99,10 @@ export function createCashForecastRouter(pool: Pool): Router {
       if (now - (lastCall.get(t) || 0) < 8000) { res.status(429).json({ error: 'Please wait a few seconds before asking again.' }); return; }
       lastCall.set(t, now);
       const custom = parseOpts(req.body || {});
-      const { opening, items, today, scenarios } = await build(pool, t, custom);
+      const { opening, items, today, scenarios, basis } = await build(pool, t, custom);
       const recv = items.filter(i => i.kind === 'in');
+      const soon30 = new Date(new Date(today + 'T00:00:00Z').getTime() + 30 * 86400000).toISOString().slice(0, 10);
+      const within30 = (c: string) => items.filter(i => i.category === c && i.due <= soon30).reduce((a, i) => a + i.amount, 0);
       const totalRecv = recv.reduce((a, i) => a + i.amount, 0);
       const facts = {
         today: dateText(today), has_cash_entry: opening.has_entry, cash_today: inrText(opening.amount),
@@ -111,7 +116,8 @@ export function createCashForecastRouter(pool: Pool): Router {
           first_day_cash_negative: dateText(s.first_negative), cover_needed_if_negative: s.shortfall > 0 ? inrText(s.shortfall) : null,
         })),
         open_receivables: { count: recv.length, total: inrText(totalRecv), largest: recv.slice().sort((a, b) => b.amount - a.amount).slice(0, 5).map(i => ({ customer: i.party, invoice: i.ref, amount: inrText(i.amount), due: dateText(i.due), overdue: i.overdue, share_of_receivables_pct: totalRecv > 0 ? Math.round((i.amount / totalRecv) * 100) : 0 })) },
-        open_payables: { count: items.length - recv.length, largest: items.filter(i => i.kind === 'out').sort((a, b) => b.amount - a.amount).slice(0, 5).map(i => ({ vendor: i.party, bill: i.ref, amount: inrText(i.amount), due: dateText(i.due), overdue: i.overdue })) },
+        payroll_and_taxes: { included: items.some(i => !!i.category), basis, salaries_due_in_next_30_days: inrText(within30('salary')), statutory_payments_due_in_next_30_days: inrText(within30('statutory')) },
+        open_payables: { count: items.filter(i => i.kind === 'out' && !i.category).length, largest: items.filter(i => i.kind === 'out' && !i.category).sort((a, b) => b.amount - a.amount).slice(0, 5).map(i => ({ vendor: i.party, bill: i.ref, amount: inrText(i.amount), due: dateText(i.due), overdue: i.overdue })) },
       };
       const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
       const resp: any = await anthropic.messages.create({ model: MODEL, max_tokens: 700, system: SYSTEM, messages: [{ role: 'user', content: JSON.stringify(facts) }] });

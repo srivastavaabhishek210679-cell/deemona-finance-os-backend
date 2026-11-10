@@ -24,7 +24,7 @@ const OPTS = (inflow: number, outflow: number, pct = 100): FcOpts => ({ days: 36
 const lastsUntil = (f: FcResult, today: string) => f.first_negative ? 'cash runs out on ' + longDate(f.first_negative) + ' (' + daysBetween(today, f.first_negative) + ' days from now)' : 'cash stays above zero for the full 12 months';
 
 export async function buildCommandCenter(pool: Pool, tenantId: string, dropPct: number, sharePct: number): Promise<{ as_of: string; assumptions: string[]; cards: Card[] }> {
-  const { opening, items, today } = await loadForecastInputs(pool, tenantId);
+  const { opening, items, today } = await loadForecastInputs(pool, tenantId, { payroll: false });
   const cards: Card[] = [];
 
   // Monthly revenue and cost from the last 3 completed months of the P&L (invoiced basis).

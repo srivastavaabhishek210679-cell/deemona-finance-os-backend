@@ -1,3 +1,4 @@
+import { mailFetch } from './mailer';
 // ============================================================
 // Deemona AI Finance OS — Autonomous Google Drive Monitor
 // File: src/services/driveMonitor.ts
@@ -279,7 +280,7 @@ async function sendReport(filename: string, fileType: FileType, report: string, 
 </html>`;
 
   try {
-    const res = await fetch('https://api.resend.com/emails', {
+    const res = await mailFetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({

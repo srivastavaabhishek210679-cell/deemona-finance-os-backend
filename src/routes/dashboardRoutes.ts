@@ -167,7 +167,7 @@ router.post('/reports/generate', requireAuth, async (req: Request, res: Response
     if (email) {
       const user = await pool.query('SELECT email FROM users WHERE tenant_id=$1 LIMIT 1', [tenantId]).catch(()=>({rows:[]}));
       if (user.rows[0]?.email) {
-        const { Resend } = await import('resend');
+        const { Resend } = await import('../services/mailer');
         const resend = new Resend(process.env.RESEND_API_KEY);
         const fmt = (n:any) => { const v=parseFloat(n||0); if(v>=10000000) return '₹'+(v/10000000).toFixed(2)+'Cr'; if(v>=100000) return '₹'+(v/100000).toFixed(2)+'L'; return '₹'+v.toFixed(2); };
         await resend.emails.send({
@@ -233,7 +233,7 @@ router.post('/reports/trigger', requireAuth, async (req: Request, res: Response)
     const email = user.rows[0]?.email;
     if (!email) return res.status(400).json({ error: 'No email found for tenant' }) as any;
 
-    const { Resend } = await import('resend');
+    const { Resend } = await import('../services/mailer');
     const resend = new Resend(process.env.RESEND_API_KEY);
     const now = new Date();
     const fmt = (n:any) => { const v=parseFloat(n||0); if(v>=10000000) return '₹'+(v/10000000).toFixed(2)+'Cr'; if(v>=100000) return '₹'+(v/100000).toFixed(2)+'L'; return '₹'+v.toFixed(2); };
