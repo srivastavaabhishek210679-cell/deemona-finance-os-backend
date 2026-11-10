@@ -13,7 +13,7 @@ const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 // ── Data fetchers ─────────────────────────────────────────────
 
 async function getGLSnapshot(pool: Pool, tenantId: string): Promise<string> {
-  const [accounts, recentEntries, apSummary, arSummary] = await Promise.all([
+  const [accounts, recentEntries, apSummary, arSummary, apByVendor, arByCustomer] = await Promise.all([
     pool.query(
       `SELECT code, name, type, sub_type,
               COALESCE(SUM(jel.debit - jel.credit), 0) as balance
@@ -33,6 +33,7 @@ async function getGLSnapshot(pool: Pool, tenantId: string): Promise<string> {
        JOIN journal_entry_lines jel ON jel.journal_entry_id = je.id
        JOIN accounts a ON a.id = jel.account_id
        WHERE je.tenant_id = $1
+       GROUP BY je.id
        ORDER BY je.date DESC LIMIT 10`,
       [tenantId]
     ),
@@ -52,6 +53,22 @@ async function getGLSnapshot(pool: Pool, tenantId: string): Promise<string> {
        FROM ar_invoices WHERE tenant_id = $1`,
       [tenantId]
     ),
+    pool.query(
+      "SELECT COALESCE(v.name,'Unknown') AS vendor, COUNT(*)::int AS bills, COALESCE(SUM(i.balance_due),0) AS outstanding, " +
+      "COUNT(*) FILTER (WHERE i.due_date < CURRENT_DATE)::int AS overdue_bills " +
+      "FROM ap_invoices i LEFT JOIN vendors v ON v.id = i.vendor_id AND v.tenant_id = i.tenant_id " +
+      "WHERE i.tenant_id = $1 AND i.status NOT IN ('paid','rejected','draft') AND i.balance_due > 0 " +
+      "GROUP BY v.name ORDER BY outstanding DESC LIMIT 10",
+      [tenantId]
+    ),
+    pool.query(
+      "SELECT COALESCE(c.name,'Unknown') AS customer, COUNT(*)::int AS invoices, COALESCE(SUM(i.balance_due),0) AS outstanding, " +
+      "COUNT(*) FILTER (WHERE i.due_date < CURRENT_DATE)::int AS overdue_invoices " +
+      "FROM ar_invoices i LEFT JOIN customers c ON c.id = i.customer_id AND c.tenant_id = i.tenant_id " +
+      "WHERE i.tenant_id = $1 AND i.status NOT IN ('paid','cancelled','draft') AND i.balance_due > 0 " +
+      "GROUP BY c.name ORDER BY outstanding DESC LIMIT 10",
+      [tenantId]
+    ),
   ]);
 
   const accountSummary = accounts.rows
@@ -64,6 +81,12 @@ async function getGLSnapshot(pool: Pool, tenantId: string): Promise<string> {
 
   const ap = apSummary.rows[0];
   const ar = arSummary.rows[0];
+  const money = (n: any): string => 'INR ' + parseFloat(n).toLocaleString('en-IN');
+  const apVendors = apByVendor.rows.map((r: any) => '  ' + r.vendor + ' | ' + r.bills + ' open bills | Outstanding: ' + money(r.outstanding) + ' | Overdue bills: ' + r.overdue_bills).join('\n');
+  const arCustomers = arByCustomer.rows.map((r: any) => '  ' + r.customer + ' | ' + r.invoices + ' open invoices | Outstanding: ' + money(r.outstanding) + ' | Overdue invoices: ' + r.overdue_invoices).join('\n');
+  const extra = '\n\nOPEN PAYABLES BY VENDOR (largest first):\n' + (apVendors || '  None') +
+    '\n\nOPEN RECEIVABLES BY CUSTOMER (largest first):\n' + (arCustomers || '  None') +
+    '\n\nNOTE: Account balances above come only from POSTED journal entries. The payables and receivables summaries and the vendor and customer lists come from the invoice sub-ledgers. The two can differ when invoices have not been journalised.';
 
   return `
 CHART OF ACCOUNTS (with current balances):
@@ -83,7 +106,7 @@ ACCOUNTS RECEIVABLE SUMMARY:
   Total Amount: INR ${parseFloat(ar.total_amount).toLocaleString('en-IN')}
   Outstanding: INR ${parseFloat(ar.outstanding).toLocaleString('en-IN')}
   Overdue: ${ar.overdue}
-`.trim();
+`.trim() + extra;
 }
 
 async function getAnomalyData(pool: Pool, tenantId: string) {
@@ -157,6 +180,8 @@ Rules:
 - Flag anomalies clearly with severity: CRITICAL / HIGH / MEDIUM / LOW
 - If data is insufficient, say so and explain what's needed
 - Keep responses concise and actionable
+
+Answer only from the data in the context. Use the vendor and customer lists to answer questions about who owes what. If the data does not contain the answer, say what is missing in one sentence and stop. Account balances come only from posted journal entries while invoice totals come from the sub-ledgers, so a difference between them is an observation to mention calmly (the invoices may not be journalised yet), not a critical error. Do not draft journal entries, estimate GST or input tax credit, or suggest corrective entries unless the user asks for them. Do not add a closing checklist of next steps. Quote amounts exactly as given.
 
 You are NOT a replacement for a CA — always recommend professional review for significant decisions.`;
 
