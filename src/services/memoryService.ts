@@ -326,7 +326,7 @@ export class MemoryService {
            FROM finance_memory
            WHERE ${whereClause}
            ORDER BY is_pinned DESC, importance DESC, created_at DESC
-           LIMIT $${pIdx + 1}`,
+           LIMIT $${pIdx}`,
           [...params, limit]
         );
         rows = fallbackResult.rows.map(this.mapRow);
